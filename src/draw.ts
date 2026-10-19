@@ -1,6 +1,7 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import type { BitmapFont } from "./bitmap-font.js";
 import { type Color, toRGBA } from "./color.js";
+import type { SpritesEach } from "./copies.js";
 import { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
@@ -274,8 +275,13 @@ export class Draw {
     positions: ArrayLike<number>,
     count = positions.length >> 1,
     o: SpriteDrawOptions = NO_OPTIONS,
+    each?: SpritesEach,
   ): void {
     if (count <= 0) return;
+    if (each && (each.scale || each.rotation || each.color)) {
+      this.spritesEach(frame, positions, count, o, each);
+      return;
+    }
     const f = this.place(frame, 0, 0, o);
     const t = this.tmp;
     const smooth = o.smooth ?? this.smooth;
@@ -283,6 +289,42 @@ export class Draw {
     const snap = !smooth && t[1] === 0 && t[2] === 0;
     this.quads += count;
     this.backend.quads(t, this.m, positions, count, f.image, f.x, f.y, f.w, f.h, this.spriteColor(o), o.flash ?? 0, smooth, snap);
+  }
+
+  private spritesEach(
+    frame: Frame | TextureSource,
+    positions: ArrayLike<number>,
+    count: number,
+    o: SpriteDrawOptions,
+    each: SpritesEach,
+  ): void {
+    const f = frame === this.lastImage && this.lastFrame ? this.lastFrame : "image" in frame ? frame : this.wholeImage(frame);
+    const origin = o.origin;
+    const rotation = o.rotation ?? 0;
+    const smooth = o.smooth ?? this.smooth;
+    const m = this.m;
+    this.quads += count;
+    this.backend.copies({
+      m,
+      positions,
+      count,
+      src: f.image,
+      sx: f.x,
+      sy: f.y,
+      sw: f.w,
+      sh: f.h,
+      ox: -(origin ? origin[0] : 0.5) * f.w,
+      oy: -(origin ? origin[1] : 0.5) * f.h,
+      scaleX: (o.scaleX ?? 1) * (o.flipX ? -1 : 1),
+      scaleY: (o.scaleY ?? 1) * (o.flipY ? -1 : 1),
+      rotation,
+      color: this.spriteColor(o),
+      flash: o.flash ?? 0,
+      smooth,
+      // Like sprite(): per copy, whole pixels when that copy doesn't rotate.
+      snap: !smooth && m[1] === 0 && m[2] === 0,
+      each,
+    });
   }
 
   /** tmp = M · T(x, y) · R(rotation) · S(sx, sy) · T(ox, oy) · S(w, h), expanded by hand. Returns the frame. */

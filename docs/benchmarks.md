@@ -6,6 +6,7 @@ The suite lives in the debuff monorepo at `bench/renderer`. It runs in real Chro
 npm run build
 npm run bench:renderer                          # bunnymark, all renderers
 npm run bench:renderer -- mixed                 # mixed scene: spryte, debuff, PixiJS Sprite
+npm run bench:renderer -- particles             # fully dynamic particles: spryte vs ParticleContainer
 npm run bench:renderer -- spryte pixi-sprite    # a subset
 ```
 
@@ -33,6 +34,13 @@ Windows 11, Chrome (Playwright), ANGLE D3D11, NVIDIA RTX 5060 Laptop GPU. All ro
 | Canvas 2D `drawImage` | 5,000 | 29.9 ms | 148.0 ms | n/a |
 | spryte Canvas 2D fallback (via debuff) | 5,000 | 29.7 ms | 224.6 ms | n/a |
 
+**particles** (one texture; per-sprite position, scale, rotation, tint and alpha, all changing every frame: ParticleContainer with every dynamic property on)
+
+| Renderer | Max @60fps | 10k | 50k | 200k |
+| --- | --- | --- | --- | --- |
+| **spryte `draw.sprites(…, each)`** | **400,000** | 0.8 ms | 2.9 ms | **6.6 ms** |
+| PixiJS 8 `ParticleContainer` (all dynamic) | 100,000 | 2.3 ms | 7.4 ms | 26.8 ms |
+
 **mixed**
 
 | Renderer | Max @60fps | 10k | 50k |
@@ -55,6 +63,7 @@ That's about 10× less JS to download before the first frame, which matters most
 ## Reading these honestly
 
 - **Like for like on the bulk path:** `draw.sprites()` vs `ParticleContainer`, both moving one texture by position only, is about **3× faster at 200k** (3.8 vs 11.3 ms) and holds 60 fps at **4× the count** or more. The reason is bandwidth: spryte uploads 8 bytes per copy, straight from your `Float32Array`. It's checked pixel-identical to a `sprite()` loop on a real GPU.
+- **Fully dynamic particles** (Pixi's best case): `sprites()` with per-copy arrays is about **4× faster** at 200k (6.6 vs 26.8 ms) and holds 60 fps at 4× the count.
 - **Like for like on the general path:** a `draw.sprite()` loop vs PixiJS `Sprite` is about **4× faster** at 50k (5.4 vs 21.2 ms). On the mixed scene (rotation, scale, tint, alpha, 4 textures) it's about **4.6× faster**.
 - The bulk path's 200k CPU time (2.3 ms) is mostly the benchmark's own simulation and copy loop, which every renderer pays.
 - Run-to-run noise on this laptop is about ±15%, and absolute numbers vary between days: every renderer measured slower here than on 2026-10-16. Compare rows within a table, not across dates.

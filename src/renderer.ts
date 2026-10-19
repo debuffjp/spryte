@@ -57,6 +57,7 @@ function pending(ctx: CanvasRenderingContext2D): Backend {
     begin: noop,
     quad: noop,
     quads: noop,
+    copies: noop,
     setBlend: noop,
     setClip: noop,
     end: noop,

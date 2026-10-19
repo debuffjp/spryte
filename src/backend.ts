@@ -13,6 +13,7 @@ export interface ClipRect {
 /** Raw access for advanced users. The backends are not interchangeable at this level. */
 export type RawContext = { kind: "webgl2"; gl: WebGL2RenderingContext } | { kind: "2d"; ctx: CanvasRenderingContext2D };
 
+import type { CopySpec } from "./copies.js";
 import type { Shader } from "./shader.js";
 import type { RenderTarget } from "./target.js";
 
@@ -68,6 +69,8 @@ export interface Backend {
     smooth: boolean,
     snap: boolean,
   ): void;
+  /** Copies of one frame with per-copy scale, rotation or colour (`draw.sprites` with `each`). */
+  copies(spec: CopySpec): void;
   setBlend(mode: BlendMode): void;
   /**
    * Send drawing to `target` (null: the canvas). `clear` (0xRRGGBBAA) clears it first; null keeps what's there.

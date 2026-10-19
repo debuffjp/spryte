@@ -126,6 +126,42 @@ for (const backend of ["webgl2", "2d"] as const) {
   );
   record(`into() restores transform and clip (${backend})`, reference, after);
 }
+// Per-copy scale, rotation and colour: sprites(…, each) must match a sprite() loop given the same values.
+{
+  const n = 20;
+  const scale = Float32Array.from({ length: n }, (_, i) => 0.5 + (i % 4) * 0.5);
+  const rotation = Float32Array.from({ length: n }, (_, i) => i * 0.37);
+  const color = Uint32Array.from({ length: n }, (_, i) => [0xffffffff, 0xff8080ff, 0x80ff80c0, 0x8080ff80][i % 4] as number);
+  const hex = (c: number) => `#${c.toString(16).padStart(8, "0")}`;
+  // Copy 0 has rotation 0 at a half-pixel position, so it also checks per-copy pixel snapping.
+  const variants: [string, { scale?: Float32Array; rotation?: Float32Array; color?: Uint32Array }, number][] = [
+    ["scale + colour (snapped)", { scale, color }, 0],
+    ["scale + rotation + colour", { scale, rotation, color }, 0],
+    ["rotation only", { rotation }, 0],
+  ];
+  for (const backend of ["webgl2", "2d"] as const)
+    for (const [name, each, tolerance] of variants) {
+      const loop = await render((draw) => {
+        for (let i = 0; i < n; i++)
+          draw.sprite(img, pos[i * 2] as number, pos[i * 2 + 1] as number, {
+            scaleX: each.scale ? (each.scale[i] as number) : 1,
+            scaleY: each.scale ? (each.scale[i] as number) : 1,
+            rotation: each.rotation ? (each.rotation[i] as number) : 0,
+            tint: each.color ? hex(each.color[i] as number) : "#fff",
+          });
+      }, backend);
+      const bulk = await render((draw) => draw.sprites(img, pos, n, {}, each), backend);
+      const differing = diff(loop, bulk);
+      let drawn = 0;
+      for (let i = 0; i < loop.length; i += 4) if (loop[i] !== 0x10 || loop[i + 1] !== 0x20) drawn++;
+      results.push({
+        name: `sprites(each) == sprite() loop: ${name} (${backend}, ${differing} px differ, tolerance ${tolerance})`,
+        differing: differing <= tolerance ? 0 : differing,
+        nonBackground: drawn,
+      });
+    }
+}
+
 // Custom shaders.
 const pixelAt = (px: Uint8Array, x: number, y: number) => Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 4));
 const check = (name: string, pass: boolean, detail: string) =>

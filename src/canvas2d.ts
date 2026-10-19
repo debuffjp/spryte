@@ -1,5 +1,6 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import { rgbaToCss } from "./color.js";
+import { type CopySpec, copyAt } from "./copies.js";
 import type { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
@@ -106,6 +107,14 @@ export class Canvas2DBackend implements Backend {
         q[5] = Math.round(q[5]);
       }
       this.quad(q, src, sx, sy, sw, sh, color, flash, smooth);
+    }
+  }
+
+  copies(c: CopySpec): void {
+    const q: Matrix = [1, 0, 0, 1, 0, 0];
+    for (let i = 0; i < c.count; i++) {
+      const color = copyAt(c, i, q);
+      this.quad(q, c.src, c.sx, c.sy, c.sw, c.sh, color, c.flash, c.smooth);
     }
   }
 

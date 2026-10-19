@@ -1,4 +1,5 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
+import { type CopySpec, copyAt } from "./copies.js";
 import type { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
@@ -59,6 +60,68 @@ void main() {
   vec4 t = texture(u_tex, v_uv) * vec4(u_color.rgb * u_color.a, u_color.a);
   outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
 }`;
+
+/**
+ * Copies with per-copy scale, rotation and colour (`draw.sprites` with `each`). The same algebra as
+ * `draw.sprite`, run per vertex; absent attributes read constant defaults (scale 1, rotation 0, white).
+ */
+const EACH_VERT = `#version 300 es
+layout(location=0) in vec2 a_corner;
+layout(location=1) in vec2 a_pos;
+layout(location=2) in float a_scale;
+layout(location=3) in float a_rot;
+layout(location=4) in uint a_color;
+uniform vec2 u_view;
+uniform vec4 u_linear;  // current transform, linear part
+uniform vec2 u_mt;      // current transform, translation
+uniform vec2 u_size;    // frame size
+uniform vec2 u_offset;  // -origin × size
+uniform vec2 u_scale;
+uniform float u_rot;
+uniform vec4 u_uv;
+uniform vec4 u_color;   // shared tint × alpha, straight
+uniform float u_snap;
+out highp vec2 v_uv;
+out vec4 v_color;
+void main() {
+  float r = u_rot + a_rot;
+  float cs = cos(r);
+  float sn = sin(r);
+  vec2 s = u_scale * a_scale;
+  vec2 ab = vec2(cs * s.x, sn * s.x);
+  vec2 cd = vec2(-sn * s.y, cs * s.y);
+  vec2 l = ab * u_offset.x + cd * u_offset.y + a_pos;
+  mat2 M = mat2(u_linear.xy, u_linear.zw);
+  vec2 e = M * l + u_mt;
+  // Like sprite(): unrotated copies land on whole pixels, decided per copy.
+  if (u_snap > 0.5 && r == 0.0) e = floor(e + 0.5);
+  vec2 p = (M * ab) * (u_size.x * a_corner.x) + (M * cd) * (u_size.y * a_corner.y) + e;
+  vec2 clip = p / u_view * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  v_uv = mix(u_uv.xy, u_uv.zw, a_corner);
+  vec4 each = vec4(float(a_color >> 24u), float((a_color >> 16u) & 255u), float((a_color >> 8u) & 255u), float(a_color & 255u)) / 255.0;
+  vec4 c = u_color * each;
+  v_color = vec4(c.rgb * c.a, c.a);
+}`;
+
+const EACH_FRAG = `#version 300 es
+precision mediump float;
+in highp vec2 v_uv;
+in vec4 v_color;
+uniform sampler2D u_tex;
+uniform float u_flash;
+out vec4 outColor;
+void main() {
+  vec4 t = texture(u_tex, v_uv) * v_color;
+  outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
+}`;
+
+interface EachPipeline extends ProgramInfo {
+  vao: WebGLVertexArrayObject;
+  /** Position, scale, rotation and colour buffers (attribute locations 1–4). */
+  buffers: WebGLBuffer[];
+  at: Record<"linear" | "mt" | "size" | "offset" | "scale" | "rot" | "uv" | "color" | "flash" | "snap", WebGLUniformLocation | null>;
+}
 
 interface CopyPipeline extends ProgramInfo {
   vao: WebGLVertexArrayObject;
@@ -144,7 +207,10 @@ export class WebGL2Backend implements Backend {
   private readonly customs = new Map<Shader, CustomProgram>();
   private vao!: WebGLVertexArrayObject;
   private quadBuffer!: WebGLBuffer;
-  private copies!: CopyPipeline;
+  private copyPipe!: CopyPipeline;
+  private each!: EachPipeline;
+  private stagingScale = new Float32Array(0);
+  private stagingRot = new Float32Array(0);
   private staging = new Float32Array(0);
   private readonly targets = new Map<RenderTarget, { fbo: WebGLFramebuffer; cached: CachedTexture }>();
   /** Where drawing goes: a render target, or null for the canvas. */
@@ -255,7 +321,8 @@ export class WebGL2Backend implements Backend {
     this.wrap();
     this.nearest = sampler(gl, gl.NEAREST);
     this.linear = sampler(gl, gl.LINEAR);
-    this.copies = this.copyPipeline(quad);
+    this.copyPipe = this.copyPipeline(quad);
+    this.each = this.eachPipeline(quad);
     gl.useProgram(program);
     gl.bindVertexArray(this.vao);
   }
@@ -375,7 +442,7 @@ export class WebGL2Backend implements Backend {
     const tex = src === this.lastSrc && this.last ? this.last : this.texture(src);
     this.lastSrc = src;
     this.last = tex;
-    const c = this.copies;
+    const c = this.copyPipe;
     gl.useProgram(c.program);
     gl.bindVertexArray(c.vao);
     this.syncView(c);
@@ -403,6 +470,90 @@ export class WebGL2Backend implements Backend {
     this.submitted++;
     gl.useProgram(this.active.program);
     gl.bindVertexArray(this.vao);
+  }
+
+  copies(c: CopySpec): void {
+    if (this.lost || c.count <= 0) return;
+    if (c.src === this.target) throw new Error("spryte: can't draw a render target into itself");
+    if (this.shader) {
+      // Custom effects run in the sprite program: one quad per copy.
+      const q: Matrix = [1, 0, 0, 1, 0, 0];
+      for (let i = 0; i < c.count; i++) {
+        const color = copyAt(c, i, q);
+        this.quad(q, c.src, c.sx, c.sy, c.sw, c.sh, color, c.flash, c.smooth);
+      }
+      return;
+    }
+    this.flush();
+    const gl = this.gl;
+    const tex = c.src === this.lastSrc && this.last ? this.last : this.texture(c.src);
+    this.lastSrc = c.src;
+    this.last = tex;
+    const p = this.each;
+    const at = p.at;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(p.vao);
+    this.syncView(p);
+    const m = c.m;
+    gl.uniform4f(at.linear, m[0], m[1], m[2], m[3]);
+    gl.uniform2f(at.mt, m[4], m[5]);
+    gl.uniform2f(at.size, c.sw, c.sh);
+    gl.uniform2f(at.offset, c.ox, c.oy);
+    gl.uniform2f(at.scale, c.scaleX, c.scaleY);
+    gl.uniform1f(at.rot, c.rotation);
+    gl.uniform4f(at.uv, c.sx * tex.iw, tex.v0 + c.sy * tex.ih, (c.sx + c.sw) * tex.iw, tex.v0 + (c.sy + c.sh) * tex.ih);
+    const col = c.color;
+    gl.uniform4f(at.color, (col >>> 24) / 255, ((col >>> 16) & 0xff) / 255, ((col >>> 8) & 0xff) / 255, (col & 0xff) / 255);
+    gl.uniform1f(at.flash, c.flash);
+    gl.uniform1f(at.snap, c.snap ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+    gl.bindSampler(0, c.smooth ? this.linear : this.nearest);
+    const n = c.count;
+    this.attribute(1, p.buffers[0] as WebGLBuffer, c.positions, n * 2, "staging");
+    if (c.each.scale) this.attribute(2, p.buffers[1] as WebGLBuffer, c.each.scale, n, "stagingScale");
+    else {
+      gl.disableVertexAttribArray(2);
+      gl.vertexAttrib1f(2, 1);
+    }
+    if (c.each.rotation) this.attribute(3, p.buffers[2] as WebGLBuffer, c.each.rotation, n, "stagingRot");
+    else {
+      gl.disableVertexAttribArray(3);
+      gl.vertexAttrib1f(3, 0);
+    }
+    if (c.each.color) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[3] as WebGLBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, c.each.color, gl.STREAM_DRAW, 0, n);
+      gl.enableVertexAttribArray(4);
+    } else {
+      gl.disableVertexAttribArray(4);
+      gl.vertexAttribI4ui(4, 0xffffffff, 0, 0, 0);
+    }
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+    this.submitted++;
+    gl.useProgram(this.active.program);
+    gl.bindVertexArray(this.vao);
+  }
+
+  /** Upload one float attribute: a Float32Array as is, anything else through a reused staging array. */
+  private attribute(
+    loc: number,
+    buffer: WebGLBuffer,
+    data: ArrayLike<number>,
+    length: number,
+    staging: "staging" | "stagingScale" | "stagingRot",
+  ): void {
+    const gl = this.gl;
+    let out: Float32Array;
+    if (data instanceof Float32Array) out = data;
+    else {
+      if (this[staging].length < length) this[staging] = new Float32Array(length);
+      out = this[staging];
+      for (let i = 0; i < length; i++) out[i] = data[i] as number;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, out, gl.STREAM_DRAW, 0, length);
+    gl.enableVertexAttribArray(loc);
   }
 
   setBlend(mode: BlendMode): void {
@@ -461,9 +612,12 @@ export class WebGL2Backend implements Backend {
       gl.deleteProgram(this.main.program);
       for (const custom of this.customs.values()) gl.deleteProgram(custom.program);
       for (const { fbo } of this.targets.values()) gl.deleteFramebuffer(fbo);
-      gl.deleteProgram(this.copies.program);
-      gl.deleteVertexArray(this.copies.vao);
-      gl.deleteBuffer(this.copies.buffer);
+      gl.deleteProgram(this.copyPipe.program);
+      gl.deleteVertexArray(this.copyPipe.vao);
+      gl.deleteBuffer(this.copyPipe.buffer);
+      gl.deleteProgram(this.each.program);
+      gl.deleteVertexArray(this.each.vao);
+      for (const b of this.each.buffers) gl.deleteBuffer(b);
     }
     this.textures.clear();
     this.targets.clear();
@@ -554,6 +708,54 @@ export class WebGL2Backend implements Backend {
     this.targets.set(target, store);
     this.textures.set(target, store.cached);
     return store;
+  }
+
+  private eachPipeline(quad: WebGLBuffer): EachPipeline {
+    const gl = this.gl;
+    const program = link(gl, EACH_VERT, EACH_FRAG);
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, "u_tex"), 0);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    const buffers: WebGLBuffer[] = [];
+    for (const [loc, size] of [
+      [1, 2],
+      [2, 1],
+      [3, 1],
+      [4, 1],
+    ] as const) {
+      const b = gl.createBuffer();
+      if (!b) throw new Error("WebGL2: could not create buffer");
+      buffers.push(b);
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      if (loc === 4) gl.vertexAttribIPointer(loc, size, gl.UNSIGNED_INT, 0, 0);
+      else gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(loc, 1);
+    }
+    const u = (name: string) => gl.getUniformLocation(program, name);
+    return {
+      program,
+      vao,
+      buffers,
+      view: u("u_view"),
+      w: -1,
+      h: -1,
+      at: {
+        linear: u("u_linear"),
+        mt: u("u_mt"),
+        size: u("u_size"),
+        offset: u("u_offset"),
+        scale: u("u_scale"),
+        rot: u("u_rot"),
+        uv: u("u_uv"),
+        color: u("u_color"),
+        flash: u("u_flash"),
+        snap: u("u_snap"),
+      },
+    };
   }
 
   private copyPipeline(quad: WebGLBuffer): CopyPipeline {
