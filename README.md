@@ -29,14 +29,14 @@ requestAnimationFrame(frame);
 
 ## Why spryte
 
-Measured against PixiJS 8 in the same session, with the same assets and the same simulation (desktop Chrome, RTX 5060 laptop). Full numbers and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
+Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved rounds, with pixel parity checked first (desktop Chrome, RTX 5060 laptop). Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
 
-| | spryte | PixiJS 8 |
-| --- | --- | --- |
-| JS at startup (brotli) | **8.4 kB** | 87.8 kB |
-| 200k particles, position only | **3.8 ms** (`draw.sprites`) | 11.3 ms (`ParticleContainer`) |
-| 200k particles, scale + rotation + tint + alpha per particle | **6.6 ms** | 26.8 ms |
-| 50k sprites, one call each | **5.4 ms** (`draw.sprite`) | 21.2 ms (`Sprite`) |
+| | spryte | PixiJS 8 | |
+| --- | --- | --- | --- |
+| JS at startup (brotli) | **8.4 kB** | 87.8 kB | 10× smaller |
+| 200k particles, per-particle scale, rotation, tint and alpha | **7.3 ms** | 31.0 ms (`ParticleContainer`) | 4.2× faster |
+| 50k sprites with rotation, scale and tint, one call each | **8.6 ms** | 33.1 ms (`Sprite`) | 3.8× faster |
+| 200k sprites, position only, bulk | **4.4 ms** | 8.1 ms (`ParticleContainer`) | 1.8× faster |
 
 - **Bulk sprites with no per-sprite JavaScript.** Pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
 - **Immediate mode.** There are no display objects to create, pool or destroy. Draw what you want this frame.

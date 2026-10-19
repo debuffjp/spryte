@@ -1,55 +1,53 @@
 # spryte benchmarks
 
-The suite lives in the debuff monorepo at `bench/renderer`. It runs in real Chrome through Playwright:
-
-```bash
-npm run build
-npm run bench:renderer                          # bunnymark, all renderers
-npm run bench:renderer -- mixed                 # mixed scene: spryte, debuff, PixiJS Sprite
-npm run bench:renderer -- particles             # fully dynamic particles: spryte vs ParticleContainer
-npm run bench:renderer -- spryte pixi-sprite    # a subset
-```
-
-## Method
-
-- The same deterministic simulation and the same 16×16 canvas textures for every renderer, nearest filtering, no antialiasing, 960×540.
-- Each frame is timed from simulation to GPU completion, forced by a 1-pixel `readPixels` (`createImageBitmap` for Canvas 2D). Vsync and rAF pacing can't hide cost. Each count gets 20 warm-up frames, then 100 measured; the median is reported.
-- "Max at 60 fps" is the largest count on a ×2 ladder (1k, 2k, 5k, …) whose median frame fits 16.7 ms. It's a lower bound within 2×.
-- **bunny:** one texture, position only. **mixed:** 4 separate textures (not an atlas), with per-sprite rotation, scale, tint and alpha.
-- Results are saved to `bench/renderer/results/<date>-<platform>-<scene>.json`, with the GPU string and the browser version.
+**Short version:** on the same machine, the same assets and the same simulation, spryte is **1.8–4.2× faster than PixiJS 8** on comparable APIs, and ships about **10× less JavaScript**. Both renderers are checked to draw the same pixels. These are one desktop machine's numbers; phones and other browsers aren't measured yet.
 
 ## Results, 2026-10-19
 
-Windows 11, Chrome (Playwright), ANGLE D3D11, NVIDIA RTX 5060 Laptop GPU. All rows in a table come from one session.
+| | |
+| --- | --- |
+| GPU | NVIDIA RTX 5060 Laptop GPU (ANGLE, Direct3D 11) |
+| CPU | AMD Ryzen 7 260 (15 GB RAM visible to the OS) |
+| Browser | Chrome 155.0.8059.82, headless via Playwright |
+| Power | AC power, power plan Turbo |
+| Versions | spryte 0.1.0 (debuff `638bd23`), PixiJS 8.22.0 |
+| Rounds | 3, interleaved; median frame, with min–max across rounds |
 
-**bunny** (frame = CPU + GPU, median)
+Raw data: `bench/renderer/results/2026-10-19-win32-{bunny,mixed,particles}.json` in the [debuff repo](https://github.com/debuffjp/debuff/tree/main/bench/renderer).
 
-| Renderer | Max @60fps | 10k | 50k | 200k |
-| --- | --- | --- | --- | --- |
-| **spryte `draw.sprites()`** (bulk, Float32Array) | **≥ 800,000** (top of the ladder) | 0.7 ms | 1.3 ms | **3.8 ms** |
-| PixiJS 8 `ParticleContainer` | 200,000 | 1.4 ms | 4.1 ms | 11.3 ms |
-| spryte `draw.sprite()` loop | 100,000 | 1.6 ms | 5.4 ms | 20.6 ms |
-| debuff `Game` on spryte (`sprite()` loop) | 100,000 | 2.1 ms | 6.3 ms | 20.5 ms |
-| PixiJS 8 `Sprite` | 20,000 | 5.3 ms | 21.2 ms | n/a |
-| Canvas 2D `drawImage` | 5,000 | 29.9 ms | 148.0 ms | n/a |
-| spryte Canvas 2D fallback (via debuff) | 5,000 | 29.7 ms | 224.6 ms | n/a |
+### Like for like
 
-**particles** (one texture; per-sprite position, scale, rotation, tint and alpha, all changing every frame: ParticleContainer with every dynamic property on)
-
-| Renderer | Max @60fps | 10k | 50k | 200k |
-| --- | --- | --- | --- | --- |
-| **spryte `draw.sprites(…, each)`** | **400,000** | 0.8 ms | 2.9 ms | **6.6 ms** |
-| PixiJS 8 `ParticleContainer` (all dynamic) | 100,000 | 2.3 ms | 7.4 ms | 26.8 ms |
-
-**mixed**
-
-| Renderer | Max @60fps | 10k | 50k |
+| Workload | spryte | PixiJS 8 | spryte is |
 | --- | --- | --- | --- |
-| spryte | 50,000 | 2.3 ms | 7.2 ms |
-| debuff `Game` on spryte | 50,000 | 2.4 ms | 9.5 ms |
-| PixiJS 8 `Sprite` | 20,000 | 7.5 ms | 33.4 ms |
+| **Dynamic particles**: per-particle position, scale, rotation, tint and alpha, 200k | `draw.sprites` with `each`: **7.3 ms** (6.4–7.8) | `ParticleContainer`, every dynamic property: 31.0 ms (26.1–31.8) | **4.2× faster** |
+| **General sprites, mixed**: 4 textures, rotation, scale, tint and alpha, 50k | `draw.sprite`: **8.6 ms** (8.2–8.9) | `Sprite`: 33.1 ms (32.2–35.2) | **3.8× faster** |
+| **General sprites, bunnymark**: one texture, position only, 50k | `draw.sprite`: **5.7 ms** (4.7–5.9) | `Sprite`: 16.0 ms (15.7–16.6) | **2.8× faster** |
+| **Bulk, position only**, 200k | `draw.sprites`: **4.4 ms** (4.2–4.4) | `ParticleContainer`: 8.1 ms (7.8–8.9) | **1.8× faster**, and 60 fps at 800k vs 200k |
 
-## Download size
+### Largest count at 60 fps (median frame ≤ 16.7 ms in every round)
+
+| Scene | spryte | PixiJS 8 |
+| --- | --- | --- |
+| bunny, bulk vs `ParticleContainer` | **800,000** | 200,000 |
+| bunny, `sprite()` vs `Sprite` | **100,000** | 50,000 |
+| mixed, `sprite()` vs `Sprite` | **50,000** | 20,000 |
+| particles, all dynamic | **400,000** | 100,000 |
+
+For reference, on bunnymark raw Canvas 2D `drawImage` holds 5,000 sprites (26.5 ms at 10k), and spryte's own Canvas 2D fallback also holds 5,000. debuff `Game` on spryte matches plain spryte within noise (5.7 ms at 50k), so the framework adds nothing measurable.
+
+### Pixel parity
+
+Before timing, each renderer draws the same seeded frame (2,000 sprites), which is compared with spryte's:
+
+| Scene | Coverage vs spryte | Pixels differing (edges) |
+| --- | --- | --- |
+| bunny: PixiJS `Sprite` and `ParticleContainer`, Canvas 2D | 100% | 0.04–0.06% |
+| mixed: PixiJS `Sprite` | 99.9% | 8.8% |
+| particles: PixiJS `ParticleContainer` | 99.9% | 8.6% |
+
+Coverage is what would expose skipped or culled work, and every renderer draws the full scene. The differing pixels sit on the edges of rotated sprites: PixiJS's `roundPixels` snaps rotated corners, and spryte only snaps unrotated sprites. `PARITY_DUMP=1` writes the frames and a diff image so you can look for yourself.
+
+### Download size
 
 Each app draws one rotated sprite: spryte with `createRenderer` + `draw.sprite`, and PixiJS 8.22 with `Application` + `Assets.load` + `Sprite`. Both are Vite 8 production builds, measured as brotli of the JS.
 
@@ -58,15 +56,22 @@ Each app draws one rotated sprite: spryte with `createRenderer` + `draw.sprite`,
 | **spryte** (with bulk sprites, render targets and shaders) | **8.4 kB** | 9.7 kB (the Canvas 2D fallback is the lazy part) |
 | PixiJS 8 | 87.8 kB | 151.9 kB |
 
-That's about 10× less JS to download before the first frame, which matters most on phones and slow connections.
+## Method
+
+The suite lives in the debuff monorepo at [`bench/renderer`](https://github.com/debuffjp/debuff/tree/main/bench/renderer). Full details are in its README. In brief:
+
+- **Same work.** Same deterministic simulation and the same 16×16 canvas textures. 960×540, nearest filtering, no antialiasing, whole-pixel rounding (PixiJS `roundPixels: true`). Pixel parity is checked first.
+- **Honest timing.** Each frame is timed from simulation to GPU completion, forced by a 1-pixel readback, so vsync can't hide cost. 20 warm-up frames, then 100 measured frames per count. The time includes the benchmark's own simulation, which every renderer pays equally.
+- **Noise control.** Several rounds, with renderer order rotated each round. Reported as the median with min–max.
+- **Full environment recorded** with every result, including the power source and plan, since laptops throttle.
+
+```bash
+npm run build && npm run bench:renderer -- particles rounds=5
+```
 
 ## Reading these honestly
 
-- **Like for like on the bulk path:** `draw.sprites()` vs `ParticleContainer`, both moving one texture by position only, is about **3× faster at 200k** (3.8 vs 11.3 ms) and holds 60 fps at **4× the count** or more. The reason is bandwidth: spryte uploads 8 bytes per copy, straight from your `Float32Array`. It's checked pixel-identical to a `sprite()` loop on a real GPU.
-- **Fully dynamic particles** (Pixi's best case): `sprites()` with per-copy arrays is about **4× faster** at 200k (6.6 vs 26.8 ms) and holds 60 fps at 4× the count.
-- **Like for like on the general path:** a `draw.sprite()` loop vs PixiJS `Sprite` is about **4× faster** at 50k (5.4 vs 21.2 ms). On the mixed scene (rotation, scale, tint, alpha, 4 textures) it's about **4.6× faster**.
-- The bulk path's 200k CPU time (2.3 ms) is mostly the benchmark's own simulation and copy loop, which every renderer pays.
-- Run-to-run noise on this laptop is about ±15%, and absolute numbers vary between days: every renderer measured slower here than on 2026-10-16. Compare rows within a table, not across dates.
-- The debuff rows include `Game`'s own requestAnimationFrame loop, which keeps running during measurement and can add frames. Treat them as an upper bound on the framework's overhead.
-- This is one machine and one browser. There are **no mobile, integrated-GPU, Firefox or Safari results yet.**
-- Not yet covered: tilemaps, text-heavy UI, clipping, render targets, object churn, memory growth, load time, time to first frame.
+- **One machine and one browser.** There are no phone, integrated-GPU, Safari or Firefox results yet, and ratios may differ there. Fill-rate-bound devices will narrow the gap, because spryte's advantage is mostly CPU and upload bandwidth.
+- **The bulk comparisons pit specialised APIs against each other.** `draw.sprites` and `ParticleContainer` both trade flexibility for speed. The `sprite()` vs `Sprite` rows are the general-purpose comparison.
+- **Numbers from different days aren't comparable.** On 2026-10-16 the same laptop measured every renderer faster (for example, PixiJS `Sprite` 50k at 12.5 ms, and the old debuff renderer 200k at 60 fps). Only ratios within one session mean anything.
+- **Not covered yet:** tilemaps, text-heavy UI, clipping-heavy scenes, render-target and shader workloads, object churn, memory growth, load time and time to first frame.
