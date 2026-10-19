@@ -1,5 +1,6 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import { rgbaToCss } from "./color.js";
+import type { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
 type Surface = HTMLCanvasElement | OffscreenCanvas;
@@ -18,6 +19,7 @@ export class Canvas2DBackend implements Backend {
   private screenScale = 1;
   private readonly surfaces = new WeakMap<RenderTarget, Surface>();
   private target: RenderTarget | null = null;
+  private warnedShader = false;
   private scale = 1;
   private smoothing: boolean | undefined;
   private scratch: HTMLCanvasElement | OffscreenCanvas | undefined;
@@ -162,6 +164,13 @@ export class Canvas2DBackend implements Backend {
         ctx.fillStyle = rgbaToCss(clear);
         ctx.fillRect(0, 0, target.width, target.height);
       }
+    }
+  }
+
+  setShader(shader: Shader | null): void {
+    if (shader && !this.warnedShader) {
+      this.warnedShader = true;
+      console.warn("spryte: custom shaders need WebGL2; the Canvas 2D fallback draws without them");
     }
   }
 

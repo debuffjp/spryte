@@ -69,6 +69,28 @@ draw.disposeTarget(glow);                             // when you're done with i
 - Targets work on both backends. A real-GPU check confirms that drawing into a target and then drawing the target 1:1 gives the same pixels as drawing directly (`npm run test:browser`).
 - After a WebGL context loss, target contents are blank (GPU memory is gone). Check `draw.contextLost`, or redraw targets each frame.
 
+## Shaders
+
+A custom fragment effect for everything drawn inside a scope: dissolves, outlines, palette swaps, water, CRT. WebGL2 only. On the Canvas 2D fallback, the draws happen without the effect, with one console warning.
+
+```ts
+const wave = draw.createShader(`
+  uniform float time;
+  vec4 effect(vec4 color, vec2 uv) {      // return the pixel; premultiplied colour
+    uv.x += sin(uv.y * 40.0 + time * 6.0) * 0.01;
+    return source(uv) * color;            // source(uv) samples the image being drawn
+  }
+`);
+wave.set("time", t);                      // float, or [x, y], [x, y, z], [x, y, z, w]
+draw.withShader(wave, () => draw.sprite(hero, x, y));
+```
+
+- `color` is the draw's tint × alpha, premultiplied. Flash is applied after your effect.
+- Shaders compile on first use. Errors throw with the driver's message, and line numbers refer to your source.
+- `set()` affects only draws made after it, even inside the same scope.
+- Shaders compose with render targets: draw into a target, then draw the target through a shader for full-screen post-processing.
+- `sprites()` inside `withShader` falls back to one quad per copy, which is correct but without the bulk speed-up.
+
 ## Diagnostics and escape hatches
 
 `kind` (`"webgl2"` or `"2d"`), `contextLost`, `quads` (submitted this frame), `drawCalls` (GPU draw calls this frame on WebGL2; one per quad on Canvas 2D), and `raw` (`{ kind: "webgl2", gl }` or `{ kind: "2d", ctx }`). If you mix raw calls with `draw` calls, restore the state you change.

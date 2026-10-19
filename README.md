@@ -1,6 +1,6 @@
 # spryte
 
-A small, fast 2D renderer for the web. Immediate-mode drawing (sprites, bulk sprites, rects, circles, lines, text, clips, blend modes, render targets) batched onto WebGL2 with instancing, with an automatic Canvas 2D fallback. No dependencies, no scene graph, no game framework.
+A small, fast 2D renderer for the web. Immediate-mode drawing (sprites, bulk sprites, rects, circles, lines, text, clips, blend modes, render targets, custom shaders) batched onto WebGL2 with instancing, with an automatic Canvas 2D fallback. No dependencies, no scene graph, no game framework.
 
 spryte is the renderer inside [debuff](https://debuff.jp), extracted so it can be used on its own. **Status: early.** The API is what debuff games already use, but it's pre-1.0 and may change.
 

@@ -63,6 +63,7 @@ function pending(ctx: CanvasRenderingContext2D): Backend {
     resize: noop,
     invalidate: noop,
     setTarget: noop,
+    setShader: noop,
     disposeTarget: noop,
     dispose: noop,
   };

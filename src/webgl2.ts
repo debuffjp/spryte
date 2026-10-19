@@ -1,4 +1,5 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
+import type { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
 /** Texture units sampled per batch. 8 is guaranteed on every WebGL2 implementation's fragment stage (min 16). */
@@ -59,11 +60,9 @@ void main() {
   outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
 }`;
 
-interface CopyPipeline {
-  program: WebGLProgram;
+interface CopyPipeline extends ProgramInfo {
   vao: WebGLVertexArrayObject;
   buffer: WebGLBuffer;
-  view: WebGLUniformLocation | null;
   quad: WebGLUniformLocation | null;
   origin: WebGLUniformLocation | null;
   linear: WebGLUniformLocation | null;
@@ -73,7 +72,7 @@ interface CopyPipeline {
   snap: WebGLUniformLocation | null;
 }
 
-const FRAG = `#version 300 es
+const FRAG_HEADER = `#version 300 es
 precision mediump float;
 // highp: mediump is fp16 on many mobile GPUs, too coarse to address texels in atlases past ~1024 px.
 in highp vec2 v_uv;
@@ -82,15 +81,32 @@ in float v_flash;
 flat in int v_unit;
 uniform sampler2D u_tex[${UNITS}];
 out vec4 outColor;
-vec4 sampleUnit(int unit, vec2 uv) {
-  ${Array.from({ length: UNITS }, (_, i) => `if (unit == ${i}) return texture(u_tex[${i}], uv);`).join("\n  ")}
+vec4 source(vec2 uv) {
+  ${Array.from({ length: UNITS }, (_, i) => `if (v_unit == ${i}) return texture(u_tex[${i}], uv);`).join("\n  ")}
   return vec4(1.0);
 }
+`;
+
+// Flash: push colour toward white while keeping alpha (premultiplied).
+const FRAG_MAIN = `
 void main() {
-  vec4 t = sampleUnit(v_unit, v_uv) * v_color;
-  // Flash: push colour toward white while keeping alpha (premultiplied).
+  vec4 t = effect(v_color, v_uv);
   outColor = vec4(mix(t.rgb, vec3(t.a), v_flash), t.a);
 }`;
+
+const FRAG = `${FRAG_HEADER}vec4 effect(vec4 color, vec2 uv) { return source(uv) * color; }${FRAG_MAIN}`;
+
+/** A linked program and the view size last uploaded to it, so `u_view` is only sent when it changes. */
+interface ProgramInfo {
+  program: WebGLProgram;
+  view: WebGLUniformLocation | null;
+  w: number;
+  h: number;
+}
+
+interface CustomProgram extends ProgramInfo {
+  locations: Map<string, WebGLUniformLocation | null>;
+}
 
 /** Floats per instance before the 4-byte colour. */
 const FLOATS = 12;
@@ -116,13 +132,16 @@ export class WebGL2Backend implements Backend {
   private readonly u32 = new Uint32Array(this.data);
   // GPU objects are recreated after a context loss, so they are not readonly.
   private instanceBuffer!: WebGLBuffer;
-  private viewLoc: WebGLUniformLocation | null = null;
   private readonly textures = new Map<TextureSource, CachedTexture>();
   private white!: CachedTexture;
   /** Filtering lives in sampler objects, so one upload serves smooth and pixelated draws. */
   private nearest!: WebGLSampler;
   private linear!: WebGLSampler;
-  private program!: WebGLProgram;
+  private main!: ProgramInfo;
+  /** The program sprite batches draw with: `main`, or a custom shader's inside `withShader`. */
+  private active!: ProgramInfo;
+  private shader: Shader | null = null;
+  private readonly customs = new Map<Shader, CustomProgram>();
   private vao!: WebGLVertexArrayObject;
   private quadBuffer!: WebGLBuffer;
   private copies!: CopyPipeline;
@@ -143,7 +162,9 @@ export class WebGL2Backend implements Backend {
   };
   private readonly onRestored = () => {
     // Every GPU object died with the context. Sources are still in memory, so textures re-upload lazily.
-    // Render targets come back blank.
+    // Render targets come back blank. Custom shaders recompile on next use.
+    const shader = this.shader;
+    this.customs.clear();
     this.textures.clear();
     this.targets.clear();
     this.target = null;
@@ -153,6 +174,7 @@ export class WebGL2Backend implements Backend {
     this.unitCount = 0;
     this.setup();
     this.lost = false;
+    if (shader) this.setShader(shader);
   };
   private readonly units: (WebGLTexture | null)[] = new Array(UNITS).fill(null);
   private readonly unitSmooth: boolean[] = new Array(UNITS).fill(false);
@@ -188,9 +210,10 @@ export class WebGL2Backend implements Backend {
     const gl = this.gl;
     this.outH = gl.drawingBufferHeight;
     const program = link(gl, VERT, FRAG);
-    this.program = program;
+    this.main = { program, view: gl.getUniformLocation(program, "u_view"), w: -1, h: -1 };
+    this.active = this.main;
+    this.shader = null;
     gl.useProgram(program);
-    this.viewLoc = gl.getUniformLocation(program, "u_view");
     gl.uniform1iv(
       gl.getUniformLocation(program, "u_tex"),
       Array.from({ length: UNITS }, (_, i) => i),
@@ -244,7 +267,7 @@ export class WebGL2Backend implements Backend {
     this.target = null;
     this.outH = gl.drawingBufferHeight;
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.uniform2f(this.viewLoc, width, height);
+    if (this.active !== this.main) this.setShader(null);
     this.viewW = width;
     this.viewH = height;
     gl.clearColor((clear >>> 24) / 255, ((clear >>> 16) & 0xff) / 255, ((clear >>> 8) & 0xff) / 255, (clear & 0xff) / 255);
@@ -330,6 +353,22 @@ export class WebGL2Backend implements Backend {
   ): void {
     if (this.lost || count <= 0) return;
     if (src === this.target) throw new Error("spryte: can't draw a render target into itself");
+    if (this.shader) {
+      // The copy pipeline has no custom effects: draw each copy as a quad through the active shader.
+      const q: Matrix = [t[0], t[1], t[2], t[3], 0, 0];
+      for (let i = 0; i < count; i++) {
+        const x = positions[i * 2] as number;
+        const y = positions[i * 2 + 1] as number;
+        q[4] = t[4] + m[0] * x + m[2] * y;
+        q[5] = t[5] + m[1] * x + m[3] * y;
+        if (snap) {
+          q[4] = Math.round(q[4]);
+          q[5] = Math.round(q[5]);
+        }
+        this.quad(q, src, sx, sy, sw, sh, color, flash, smooth);
+      }
+      return;
+    }
     // Draw order: everything queued so far goes first.
     this.flush();
     const gl = this.gl;
@@ -339,7 +378,7 @@ export class WebGL2Backend implements Backend {
     const c = this.copies;
     gl.useProgram(c.program);
     gl.bindVertexArray(c.vao);
-    gl.uniform2f(c.view, this.viewW, this.viewH);
+    this.syncView(c);
     gl.uniform4f(c.quad, t[0], t[1], t[2], t[3]);
     gl.uniform2f(c.origin, t[4], t[5]);
     gl.uniform4f(c.linear, m[0], m[1], m[2], m[3]);
@@ -362,7 +401,7 @@ export class WebGL2Backend implements Backend {
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW, 0, count * 2);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
     this.submitted++;
-    gl.useProgram(this.program);
+    gl.useProgram(this.active.program);
     gl.bindVertexArray(this.vao);
   }
 
@@ -419,7 +458,8 @@ export class WebGL2Backend implements Backend {
       gl.deleteBuffer(this.instanceBuffer);
       gl.deleteBuffer(this.quadBuffer);
       gl.deleteVertexArray(this.vao);
-      gl.deleteProgram(this.program);
+      gl.deleteProgram(this.main.program);
+      for (const custom of this.customs.values()) gl.deleteProgram(custom.program);
       for (const { fbo } of this.targets.values()) gl.deleteFramebuffer(fbo);
       gl.deleteProgram(this.copies.program);
       gl.deleteVertexArray(this.copies.vao);
@@ -427,8 +467,22 @@ export class WebGL2Backend implements Backend {
     }
     this.textures.clear();
     this.targets.clear();
+    this.customs.clear();
     this.lastSrc = null;
     this.last = undefined;
+  }
+
+  setShader(shader: Shader | null): void {
+    if (shader === this.shader) return;
+    this.flush();
+    if (this.shader) this.shader.onChange = undefined;
+    this.shader = shader;
+    if (this.lost) return;
+    const next = shader ? this.custom(shader) : this.main;
+    this.active = next;
+    this.gl.useProgram(next.program);
+    // Uniform changes flush the batch drawn with the old values first.
+    if (shader) shader.onChange = () => this.flush();
   }
 
   setTarget(target: RenderTarget | null, clear: number | null, width: number, height: number): void {
@@ -448,7 +502,6 @@ export class WebGL2Backend implements Backend {
       this.outH = gl.drawingBufferHeight;
     }
     this.target = target;
-    gl.uniform2f(this.viewLoc, width, height);
     this.viewW = width;
     this.viewH = height;
     if (clear !== null) {
@@ -525,6 +578,8 @@ export class WebGL2Backend implements Backend {
       vao,
       buffer,
       view: at("u_view"),
+      w: -1,
+      h: -1,
       quad: at("u_quad"),
       origin: at("u_origin"),
       linear: at("u_linear"),
@@ -551,12 +606,54 @@ export class WebGL2Backend implements Backend {
       gl.bindTexture(gl.TEXTURE_2D, this.units[i] ?? null);
       gl.bindSampler(i, this.unitSmooth[i] ? this.linear : this.nearest);
     }
+    this.syncView(this.active);
+    if (this.shader) this.syncUniforms(this.shader, this.active as CustomProgram);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.f32, 0, this.count * (STRIDE / 4));
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
     this.submitted++;
     this.count = 0;
     this.unitCount = 0;
+  }
+
+  /** Upload `u_view` to a program if the destination size changed since it last drew. The program must be bound. */
+  private syncView(p: ProgramInfo): void {
+    if (p.w === this.viewW && p.h === this.viewH) return;
+    this.gl.uniform2f(p.view, this.viewW, this.viewH);
+    p.w = this.viewW;
+    p.h = this.viewH;
+  }
+
+  private syncUniforms(shader: Shader, p: CustomProgram): void {
+    const gl = this.gl;
+    for (const [name, value] of shader.uniforms) {
+      let loc = p.locations.get(name);
+      if (loc === undefined) {
+        loc = gl.getUniformLocation(p.program, name);
+        p.locations.set(name, loc);
+      }
+      if (loc === null) continue; // unused uniforms are optimised away by the compiler
+      if (typeof value === "number") gl.uniform1f(loc, value);
+      else if (value.length === 2) gl.uniform2f(loc, value[0], value[1]);
+      else if (value.length === 3) gl.uniform3f(loc, value[0], value[1], value[2]);
+      else gl.uniform4f(loc, value[0], value[1], value[2], value[3]);
+    }
+  }
+
+  private custom(shader: Shader): CustomProgram {
+    let p = this.customs.get(shader);
+    if (p) return p;
+    const gl = this.gl;
+    // #line makes compile errors point at lines in the user's source.
+    const program = link(gl, VERT, `${FRAG_HEADER}#line 1\n${shader.source}\n${FRAG_MAIN}`, "custom shader");
+    gl.useProgram(program);
+    gl.uniform1iv(
+      gl.getUniformLocation(program, "u_tex"),
+      Array.from({ length: UNITS }, (_, i) => i),
+    );
+    p = { program, view: gl.getUniformLocation(program, "u_view"), w: -1, h: -1, locations: new Map() };
+    this.customs.set(shader, p);
+    return p;
   }
 
   private texture(src: TextureSource): CachedTexture {
@@ -605,13 +702,14 @@ function sampler(gl: WebGL2RenderingContext, filter: number): WebGLSampler {
   return s;
 }
 
-function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
+function link(gl: WebGL2RenderingContext, vs: string, fs: string, label = "WebGL2"): WebGLProgram {
   const compile = (type: number, source: string) => {
     const shader = gl.createShader(type);
     if (!shader) throw new Error("WebGL2: could not create shader");
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(`WebGL2 shader: ${gl.getShaderInfoLog(shader)}`);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
+      throw new Error(`spryte: ${label} failed to compile:\n${gl.getShaderInfoLog(shader)}`);
     return shader;
   };
   const program = gl.createProgram();

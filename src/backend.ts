@@ -13,6 +13,7 @@ export interface ClipRect {
 /** Raw access for advanced users. The backends are not interchangeable at this level. */
 export type RawContext = { kind: "webgl2"; gl: WebGL2RenderingContext } | { kind: "2d"; ctx: CanvasRenderingContext2D };
 
+import type { Shader } from "./shader.js";
 import type { RenderTarget } from "./target.js";
 
 /** Image sources the renderer can draw. Textures are cached per source object. */
@@ -73,6 +74,8 @@ export interface Backend {
    * `width, height` are the logical size of the destination (the target's pixel size, or the canvas's logical size).
    */
   setTarget(target: RenderTarget | null, clear: number | null, width: number, height: number): void;
+  /** Draw subsequent quads with a custom fragment effect (null: the default). */
+  setShader(shader: Shader | null): void;
   /** Free a target's GPU or canvas storage. */
   disposeTarget(target: RenderTarget): void;
   /** Restrict drawing to a rectangle in backing-store pixels (top-left origin), or remove the clip. */

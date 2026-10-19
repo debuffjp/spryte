@@ -180,6 +180,8 @@ describe("WebGL2Backend", () => {
       const t = draw.createTarget(32, 16);
       calls.length = 0;
       draw.into(t, () => draw.rect(0, 0, 4, 4, "#fff"));
+      draw.rect(0, 0, 4, 4, "#fff");
+      draw.end();
       const binds = calls.filter((c) => c.name === "bindFramebuffer").map((c) => c.args[1] !== null);
       expect(binds.at(0)).toBe(true);
       expect(binds.at(-1)).toBe(false);
@@ -193,7 +195,6 @@ describe("WebGL2Backend", () => {
         [32, 16],
         [50, 25],
       ]);
-      draw.end();
     });
 
     it("samples targets upside down, since WebGL stores them bottom row first", () => {

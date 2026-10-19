@@ -47,10 +47,10 @@ Each app draws one rotated sprite: spryte with `createRenderer` + `draw.sprite`,
 
 | | JS at startup | All JS (including lazy chunks) |
 | --- | --- | --- |
-| **spryte** | **7.2 kB** | 8.1 kB (the Canvas 2D fallback is the lazy part) |
+| **spryte** (with bulk sprites, render targets and shaders) | **8.4 kB** | 9.7 kB (the Canvas 2D fallback is the lazy part) |
 | PixiJS 8 | 87.8 kB | 151.9 kB |
 
-That's about 12× less JS to download before the first frame, which matters most on phones and slow connections.
+That's about 10× less JS to download before the first frame, which matters most on phones and slow connections.
 
 ## Reading these honestly
 

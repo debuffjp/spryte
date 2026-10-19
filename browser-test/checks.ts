@@ -126,4 +126,92 @@ for (const backend of ["webgl2", "2d"] as const) {
   );
   record(`into() restores transform and clip (${backend})`, reference, after);
 }
+// Custom shaders.
+const pixelAt = (px: Uint8Array, x: number, y: number) => Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 4));
+const check = (name: string, pass: boolean, detail: string) =>
+  results.push({ name: `${name}: ${detail}`, differing: pass ? 0 : 1, nonBackground: 1000 });
+{
+  const identity = (draw: Draw) => draw.createShader(`vec4 effect(vec4 color, vec2 uv) { return source(uv) * color; }`);
+  const scene = (draw: Draw) => {
+    busy(draw);
+    for (let i = 0; i < 5; i++) draw.sprite(img, 10 + i * 12, 50, { flash: i / 4, alpha: 0.8 });
+  };
+  const plain = await render(scene, "webgl2", 1);
+  const shaded = await render((draw) => draw.withShader(identity(draw), () => scene(draw)), "webgl2", 1);
+  record("identity shader == no shader (incl. sprites(), flash, clip, blend)", plain, shaded);
+
+  const green = await render(
+    (draw) => {
+      const s = draw.createShader(`vec4 effect(vec4 color, vec2 uv) { return vec4(0.0, 1.0, 0.0, 1.0); }`);
+      draw.withShader(s, () => draw.rect(10, 10, 20, 20, "#f00"));
+      draw.rect(40, 10, 20, 20, "#f00");
+    },
+    "webgl2",
+    1,
+  );
+  check(
+    "shader output reaches the screen and stops at the scope's end",
+    pixelAt(green, 15, 15).join() === "0,255,0,255" && pixelAt(green, 45, 15).join() === "255,0,0,255",
+    `${pixelAt(green, 15, 15)} / ${pixelAt(green, 45, 15)}`,
+  );
+
+  const uni = await render(
+    (draw) => {
+      const s = draw.createShader(`uniform vec3 tint; vec4 effect(vec4 color, vec2 uv) { return vec4(tint, 1.0); }`);
+      draw.withShader(s, () => {
+        s.set("tint", [1, 0, 0]);
+        draw.rect(10, 10, 20, 20, "#fff");
+        s.set("tint", [0, 0, 1]);
+        draw.rect(40, 10, 20, 20, "#fff");
+      });
+    },
+    "webgl2",
+    1,
+  );
+  check(
+    "uniform changes apply only to later draws",
+    pixelAt(uni, 15, 15).join() === "255,0,0,255" && pixelAt(uni, 45, 15).join() === "0,0,255,255",
+    `${pixelAt(uni, 15, 15)} / ${pixelAt(uni, 45, 15)}`,
+  );
+
+  let message = "";
+  await render(
+    (draw) => {
+      const bad = draw.createShader(`uniform float t;
+vec4 effect(vec4 color, vec2 uv) {
+  return nope(uv);
+}`);
+      try {
+        draw.withShader(bad, () => draw.rect(0, 0, 1, 1, "#fff"));
+      } catch (e) {
+        message = String(e);
+      }
+    },
+    "webgl2",
+    1,
+  );
+  check(
+    "compile errors name the user's line",
+    /custom shader failed to compile/.test(message) && /0?:?3:/.test(message),
+    JSON.stringify(message.slice(0, 120)),
+  );
+
+  const inTarget = await render(
+    (draw) => {
+      const s = draw.createShader(`vec4 effect(vec4 color, vec2 uv) { return vec4(0.0, 1.0, 0.0, 1.0); }`);
+      const t = draw.createTarget(W, H);
+      draw.into(t, () => draw.withShader(s, () => draw.rect(10, 10, 20, 20, "#f00")));
+      draw.sprite(t, 0, 0, { origin: [0, 0] });
+      draw.rect(40, 10, 20, 20, "#f00");
+    },
+    "webgl2",
+    1,
+  );
+  check(
+    "shaders work inside render targets",
+    pixelAt(inTarget, 15, 15).join() === "0,255,0,255" && pixelAt(inTarget, 45, 15).join() === "255,0,0,255",
+    `${pixelAt(inTarget, 15, 15)} / ${pixelAt(inTarget, 45, 15)}`,
+  );
+}
+
 (window as unknown as { __checks: unknown }).__checks = results;

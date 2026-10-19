@@ -1,6 +1,7 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import type { BitmapFont } from "./bitmap-font.js";
 import { type Color, toRGBA } from "./color.js";
+import { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
 /** A rectangular region of an image, in source pixels. */
@@ -65,6 +66,7 @@ export class Draw {
   private lastImage: TextureSource | null = null;
   private lastFrame: Frame | undefined;
   private readonly clips: ClipRect[] = [];
+  private shader: Shader | null = null;
   /** The render target being drawn into, or null for the canvas. */
   private target: RenderTarget | null = null;
   /** The canvas's logical size this frame, to switch back to after `into()`. */
@@ -429,6 +431,26 @@ export class Draw {
     }
   }
 
+  // ---- shaders ------------------------------------------------------------------------------
+
+  /** A custom fragment effect: see `Shader`. Compiled on first use, so errors surface at the first `withShader` draw. */
+  createShader(source: string): Shader {
+    return new Shader(source);
+  }
+
+  /** Run `fn` with everything drawn through `shader`, then restore the previous one. Nests. WebGL2 only (see `Shader`). */
+  withShader(shader: Shader, fn: () => void): void {
+    const outer = this.shader;
+    this.shader = shader;
+    this.backend.setShader(shader);
+    try {
+      fn();
+    } finally {
+      this.shader = outer;
+      this.backend.setShader(outer);
+    }
+  }
+
   /** Free a target's GPU memory. Drawing it afterwards recreates it, blank. */
   disposeTarget(target: RenderTarget): void {
     this.backend.disposeTarget(target);
@@ -455,6 +477,7 @@ export class Draw {
     this.viewW = width;
     this.viewH = height;
     this.target = null;
+    this.shader = null;
     this.quads = 0;
     this.depth = 0;
     this.clips.length = 0;
