@@ -11,7 +11,7 @@ layout(location=3) in vec4 a_uv;       // u0, v0, u1, v1 (normalised)
 layout(location=4) in vec2 a_extra;    // flash, texture unit
 layout(location=5) in vec4 a_color;    // normalised RGBA
 uniform vec2 u_view;
-out vec2 v_uv;
+out highp vec2 v_uv;
 out vec4 v_color;
 out float v_flash;
 flat out int v_unit;
@@ -27,7 +27,8 @@ void main() {
 
 const FRAG = `#version 300 es
 precision mediump float;
-in vec2 v_uv;
+// highp: mediump is fp16 on many mobile GPUs, too coarse to address texels in atlases past ~1024 px.
+in highp vec2 v_uv;
 in vec4 v_color;
 in float v_flash;
 flat in int v_unit;
@@ -52,7 +53,6 @@ interface CachedTexture {
   /** 1 / width and 1 / height, so UV maths multiplies instead of divides. */
   iw: number;
   ih: number;
-  smooth: boolean;
 }
 
 /** Instanced, multi-texture WebGL2 sprite batcher behind the `draw` API. */
@@ -69,6 +69,12 @@ export class WebGL2Backend implements Backend {
   private viewLoc: WebGLUniformLocation | null = null;
   private readonly textures = new Map<TextureSource, CachedTexture>();
   private white!: CachedTexture;
+  /** Filtering lives in sampler objects, so one upload serves smooth and pixelated draws. */
+  private nearest!: WebGLSampler;
+  private linear!: WebGLSampler;
+  private program!: WebGLProgram;
+  private vao!: WebGLVertexArrayObject;
+  private quadBuffer!: WebGLBuffer;
   /** True between webglcontextlost and webglcontextrestored: drawing is skipped. */
   private lost = false;
   private readonly onLost = (e: Event) => {
@@ -87,6 +93,7 @@ export class WebGL2Backend implements Backend {
     this.lost = false;
   };
   private readonly units: (WebGLTexture | null)[] = new Array(UNITS).fill(null);
+  private readonly unitSmooth: boolean[] = new Array(UNITS).fill(false);
   private unitCount = 0;
   private lastSrc: TextureSource | null = null;
   private last: CachedTexture | undefined;
@@ -116,6 +123,7 @@ export class WebGL2Backend implements Backend {
   private setup(): void {
     const gl = this.gl;
     const program = link(gl, VERT, FRAG);
+    this.program = program;
     gl.useProgram(program);
     this.viewLoc = gl.getUniformLocation(program, "u_view");
     gl.uniform1iv(
@@ -123,8 +131,10 @@ export class WebGL2Backend implements Backend {
       Array.from({ length: UNITS }, (_, i) => i),
     );
 
-    gl.bindVertexArray(gl.createVertexArray());
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer();
+    this.quadBuffer = quad;
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
@@ -153,8 +163,10 @@ export class WebGL2Backend implements Backend {
     if (!whiteTex) throw new Error("WebGL2: could not create texture");
     gl.bindTexture(gl.TEXTURE_2D, whiteTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-    this.white = { tex: whiteTex, iw: 1, ih: 1, smooth: false };
-    this.filter(false);
+    this.white = { tex: whiteTex, iw: 1, ih: 1 };
+    this.wrap();
+    this.nearest = sampler(gl, gl.NEAREST);
+    this.linear = sampler(gl, gl.LINEAR);
   }
 
   begin(clear: number, width: number, height: number): void {
@@ -180,20 +192,22 @@ export class WebGL2Backend implements Backend {
   ): void {
     if (this.lost) return;
     // Fast path: consecutive draws from the same source skip the texture lookup.
-    const t = src === null ? this.white : src === this.lastSrc && this.last?.smooth === smooth ? this.last : this.texture(src, smooth);
+    const t = src === null ? this.white : src === this.lastSrc && this.last ? this.last : this.texture(src);
     this.lastSrc = src;
     this.last = t;
-    let unit = this.units.indexOf(t.tex);
-    if (unit < 0 || unit >= this.unitCount) {
+    if (this.count === this.capacity) this.flush();
+    let unit = -1;
+    for (let i = 0; i < this.unitCount; i++) {
+      if (this.units[i] === t.tex && this.unitSmooth[i] === smooth) {
+        unit = i;
+        break;
+      }
+    }
+    if (unit < 0) {
       if (this.unitCount === UNITS) this.flush();
       unit = this.unitCount++;
       this.units[unit] = t.tex;
-    }
-    if (this.count === this.capacity) {
-      this.flush();
-      unit = 0;
-      this.units[0] = t.tex;
-      this.unitCount = 1;
+      this.unitSmooth[unit] = smooth;
     }
     const f = this.count * (STRIDE / 4);
     const { f32 } = this;
@@ -255,11 +269,24 @@ export class WebGL2Backend implements Backend {
     if (this.lastSrc === src) this.lastSrc = null;
   }
 
+  /** Release every GPU object this backend created, so renderers can be created and destroyed repeatedly. */
   dispose(): void {
-    this.gl.canvas.removeEventListener("webglcontextlost", this.onLost);
-    this.gl.canvas.removeEventListener("webglcontextrestored", this.onRestored);
-    if (!this.lost) for (const { tex } of this.textures.values()) this.gl.deleteTexture(tex);
+    const gl = this.gl;
+    gl.canvas.removeEventListener("webglcontextlost", this.onLost);
+    gl.canvas.removeEventListener("webglcontextrestored", this.onRestored);
+    if (!this.lost) {
+      for (const { tex } of this.textures.values()) gl.deleteTexture(tex);
+      gl.deleteTexture(this.white.tex);
+      gl.deleteSampler(this.nearest);
+      gl.deleteSampler(this.linear);
+      gl.deleteBuffer(this.instanceBuffer);
+      gl.deleteBuffer(this.quadBuffer);
+      gl.deleteVertexArray(this.vao);
+      gl.deleteProgram(this.program);
+    }
     this.textures.clear();
+    this.lastSrc = null;
+    this.last = undefined;
   }
 
   private flush(): void {
@@ -276,6 +303,7 @@ export class WebGL2Backend implements Backend {
     for (let i = 0; i < this.unitCount; i++) {
       gl.activeTexture(gl.TEXTURE0 + i);
       gl.bindTexture(gl.TEXTURE_2D, this.units[i] ?? null);
+      gl.bindSampler(i, this.unitSmooth[i] ? this.linear : this.nearest);
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.f32, 0, this.count * (STRIDE / 4));
@@ -285,10 +313,9 @@ export class WebGL2Backend implements Backend {
     this.unitCount = 0;
   }
 
-  private texture(src: TextureSource, smooth: boolean): CachedTexture {
+  private texture(src: TextureSource): CachedTexture {
     const hit = this.textures.get(src);
-    if (hit && hit.smooth === smooth) return hit;
-    if (hit) this.invalidate(src);
+    if (hit) return hit;
     const gl = this.gl;
     const tex = gl.createTexture();
     if (!tex) throw new Error("WebGL2: could not create texture");
@@ -296,20 +323,20 @@ export class WebGL2Backend implements Backend {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-    this.filter(smooth);
+    this.wrap();
     const w = "naturalWidth" in src ? src.naturalWidth : src.width;
     const h = "naturalHeight" in src ? src.naturalHeight : src.height;
-    const cached = { tex, iw: 1 / w, ih: 1 / h, smooth };
+    const cached = { tex, iw: 1 / w, ih: 1 / h };
     this.textures.set(src, cached);
     // Unit 0 is now bound to this texture; the next flush rebinds whatever the batch needs.
     return cached;
   }
 
-  private filter(smooth: boolean): void {
+  /** Texture parameters for the bound texture. Filtering comes from the samplers; this keeps the texture complete without them. */
+  private wrap(): void {
     const gl = this.gl;
-    const f = smooth ? gl.LINEAR : gl.NEAREST;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
@@ -319,6 +346,16 @@ export class WebGL2Backend implements Backend {
     if (this.blend === "add") gl.blendFunc(gl.ONE, gl.ONE);
     else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   }
+}
+
+function sampler(gl: WebGL2RenderingContext, filter: number): WebGLSampler {
+  const s = gl.createSampler();
+  if (!s) throw new Error("WebGL2: could not create sampler");
+  gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, filter);
+  gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, filter);
+  gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return s;
 }
 
 function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
@@ -331,9 +368,11 @@ function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram 
     return shader;
   };
   const program = gl.createProgram();
-  gl.attachShader(program, compile(gl.VERTEX_SHADER, vs));
-  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fs));
+  const shaders = [compile(gl.VERTEX_SHADER, vs), compile(gl.FRAGMENT_SHADER, fs)];
+  for (const shader of shaders) gl.attachShader(program, shader);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`WebGL2 program: ${gl.getProgramInfoLog(program)}`);
+  // The linked program keeps the compiled code; the shader objects can go.
+  for (const shader of shaders) gl.deleteShader(shader);
   return program;
 }
