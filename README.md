@@ -1,8 +1,10 @@
 # spryte
 
-A small, fast 2D renderer for the web. You draw in immediate mode (sprites, bulk sprites, rects, circles, lines, text, clips, blend modes, render targets and custom shaders), and spryte batches it onto WebGL2 with instancing, falling back to Canvas 2D automatically. No dependencies, no scene graph, no game framework.
+**A 2D renderer for the web that draws moving sprites 2–4× faster than PixiJS 8**, in an [open, pixel-checked benchmark](https://github.com/debuffjp/2dbench), from about a ninth of the JavaScript (10.1 kB brotli).
 
-> **Alpha.** spryte is the renderer inside [debuff](https://debuff.jp), where games already run on it. The API may still change before 1.0. So far it has been measured on desktop Chrome only; mobile and other browsers aren't verified yet.
+You draw in immediate mode (sprites, bulk sprites, rects, circles, lines, text, clips, blend modes, render targets and custom shaders), and spryte batches it onto WebGL2 with instancing, falling back to Canvas 2D automatically. No dependencies, no scene graph, no game framework.
+
+> **Alpha.** spryte is the renderer inside [debuff](https://debuff.jp), where games already run on it. The API may still change before 1.0. It's measured mostly on desktop Chrome (Windows and Linux), plus one iPhone; Safari on macOS, Firefox and Android are barely covered yet. [Run 2dbench on your device](https://debuffjp.github.io/2dbench/mobile.html) to help.
 
 ```bash
 npm install spryte
@@ -37,6 +39,8 @@ Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved 
 | 200k particles, per-particle scale, rotation, tint and alpha all changing | **7.7 ms** | 28.9 ms (`ParticleContainer`) | 3.8× faster |
 | 50k sprites with rotation, scale and tint, one call each | **9.8 ms** | 32.3 ms (`Sprite`) | 3.3× faster |
 | 200k sprites, position only, bulk | **4.4 ms** | 8.9 ms (`ParticleContainer`) | 2.0× faster |
+
+In [2dbench](https://github.com/debuffjp/2dbench)'s raycaster scene (a retro first-person maze drawn as thousands of texture slices), spryte held 10,000 enemies at 60 fps against PixiJS `Sprite`'s 2,000. The gap is per-sprite work: a PixiJS `Sprite` is a scene-graph object updated, bounded and batched every frame, while spryte writes a few numbers per sprite into a typed array and the GPU expands them. Static scenes, where PixiJS can cache, are much closer.
 
 - **Bulk sprites with no per-sprite JavaScript.** On WebGL2, pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
 - **Immediate mode.** There are no display objects to create, pool or destroy. Draw what you want this frame.
