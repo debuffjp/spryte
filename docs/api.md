@@ -31,7 +31,7 @@ draw.dispose();                           // frees GPU objects and listeners; th
 | `circle(x, y, r, color)` | Filled, antialiased circle. |
 | `line(x1, y1, x2, y2, width, color)` | Drawn as a rotated rectangle. |
 | `sprite(frameOrImage, x, y, options?)` | Image or `Frame` (`{ image, x, y, w, h }`), anchored at `origin` (default centre). Options: `origin`, `scaleX`, `scaleY`, `rotation` (radians), `flipX`, `flipY`, `alpha`, `tint`, `flash` (0–1 toward white), `smooth`. **Doesn't allocate:** reuse one options object in hot loops. |
-| `sprites(frame, positions, count?, options?, each?)` | One frame at many positions: particles, bullets, swarms. `positions` is x, y pairs. Pass a reused `Float32Array` and it's uploaded to the GPU as is, with **no JavaScript work per copy**. `options` apply to every copy. `each` adds per-copy values: `scale` (Float32Array), `rotation` (Float32Array, radians) and `color` (Uint32Array of `0xRRGGBBAA`, multiplied with the tint). These are also uploaded as is. The output is pixel-identical to a `sprite()` loop with the same values, including pixel snapping (checked on a real GPU by `npm run test:browser`). It's one draw call on WebGL2 and breaks the current batch. |
+| `sprites(frame, positions, count?, options?, each?)` | One frame at many positions: particles, bullets, swarms. `positions` is x, y pairs. On WebGL2, a reused `Float32Array` is uploaded to the GPU as is, with **no JavaScript work per copy**. Other array types are copied into a staging array first, and inside `withShader` and on the Canvas 2D fallback each copy is drawn as its own quad. `options` apply to every copy. `each` adds per-copy values: `scale` (Float32Array), `rotation` (Float32Array, radians) and `color` (Uint32Array of `0xRRGGBBAA`, multiplied with the tint). These are uploaded as is too. `count` is clamped to the shortest array, and a `NaN` or negative count draws nothing. The output is pixel-identical to a `sprite()` loop with the same values, including pixel snapping (checked on a real GPU by `npm run test:browser`). It's one draw call on WebGL2 and breaks the current batch. |
 | `text(text, x, y, options?)` | `font` (CSS string or `BitmapFont`), `color`, `align`, `baseline`, `alpha`. CSS text is rasterised once and cached (LRU, 256 entries). |
 | `measure(text, font?)` | Logical `{ w, h }` that `text()` fills. |
 
@@ -64,8 +64,8 @@ draw.sprite(glow, 0, 0, { origin: [0, 0], scaleX: 2, scaleY: 2, smooth: true });
 draw.disposeTarget(glow);                             // when you're done with it
 ```
 
-- `into()` nests, and restores the outer transform, clips, alpha and destination afterwards, even if `fn` throws.
-- Drawing a target into itself, or disposing it while you're drawing into it, throws.
+- `into()` nests, and restores the outer transform, clips, alpha and destination afterwards, even if `fn` throws. The **blend mode and an active `withShader` are not reset**: they apply inside the target and stay as `fn` left them (`begin()` resets both each frame).
+- Drawing a target into itself, disposing it while you're drawing into it, or making it larger than the GPU's `MAX_TEXTURE_SIZE` throws. Sizes must be whole pixels.
 - Targets work on both backends. A real-GPU check confirms that drawing into a target and then drawing the target 1:1 gives the same pixels as drawing directly (`npm run test:browser`).
 - After a WebGL context loss, target contents are blank (GPU memory is gone). Check `draw.contextLost`, or redraw targets each frame.
 
@@ -86,7 +86,7 @@ draw.withShader(wave, () => draw.sprite(hero, x, y));
 ```
 
 - `color` is the draw's tint × alpha, premultiplied. Flash is applied after your effect.
-- Shaders compile on first use. Errors throw with the driver's message, and line numbers refer to your source.
+- Shaders compile on first use. Errors throw with the driver's message, and line numbers refer to your source. A shader that fails to compile leaves the renderer as it was, and using it again throws again.
 - `set()` affects only draws made after it, even inside the same scope.
 - Shaders compose with render targets: draw into a target, then draw the target through a shader for full-screen post-processing.
 - `sprites()` inside `withShader` falls back to one quad per copy, which is correct but without the bulk speed-up.

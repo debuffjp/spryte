@@ -129,6 +129,8 @@ export class Canvas2DBackend implements Backend {
     if (this.clipped) {
       ctx.restore();
       this.clipped = false;
+      // restore() also reset imageSmoothingEnabled: forget the cached value so the next draw sets it.
+      this.smoothing = undefined;
       this.setBlend(this.blendMode);
     }
     if (!rect) return;

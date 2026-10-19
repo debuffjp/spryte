@@ -262,7 +262,7 @@ export class Draw {
    * Draw one image frame at many positions in a single call: particles, bullets, swarms, starfields.
    * `positions` holds x, y pairs (a `Float32Array` you reuse is ideal); `count` defaults to all of them.
    * Every copy shares `options` (rotation, scale, tint, alpha…), so per-copy work is just the position.
-   * Much faster than calling `sprite()` in a loop, and allocation-free.
+   * Much faster than calling `sprite()` in a loop, with no per-sprite allocation.
    *
    * ```ts
    * const pos = new Float32Array(2 * MAX);
@@ -277,6 +277,13 @@ export class Draw {
     o: SpriteDrawOptions = NO_OPTIONS,
     each?: SpritesEach,
   ): void {
+    // Never read past the arrays: GL would reject the whole upload and draw nothing.
+    count = Math.min(Math.floor(count) || 0, positions.length >> 1);
+    if (each) {
+      if (each.scale) count = Math.min(count, each.scale.length);
+      if (each.rotation) count = Math.min(count, each.rotation.length);
+      if (each.color) count = Math.min(count, each.color.length);
+    }
     if (count <= 0) return;
     if (each && (each.scale || each.rotation || each.color)) {
       this.spritesEach(frame, positions, count, o, each);
@@ -483,8 +490,9 @@ export class Draw {
   /** Run `fn` with everything drawn through `shader`, then restore the previous one. Nests. WebGL2 only (see `Shader`). */
   withShader(shader: Shader, fn: () => void): void {
     const outer = this.shader;
-    this.shader = shader;
+    // Switch the backend first: if the shader fails to compile, nothing has changed.
     this.backend.setShader(shader);
+    this.shader = shader;
     try {
       fn();
     } finally {
@@ -546,9 +554,10 @@ export class Draw {
     this.backend.end();
   }
 
-  /** @internal Release GPU resources and listeners. */
+  /** Release GPU resources and listeners. Using this `Draw` afterwards throws; disposing again does nothing. */
   dispose(): void {
     this.backend.dispose();
+    this.backend = disposed(this.backend);
   }
 
   /** @internal */
@@ -618,6 +627,30 @@ export class Draw {
 }
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+
+/** Stands in for a disposed backend: any drawing throws a clear error instead of touching dead GPU objects. */
+function disposed(was: Backend): Backend {
+  const fail = () => {
+    throw new Error("spryte: this renderer was disposed; create a new one with createRenderer()");
+  };
+  return {
+    kind: was.kind,
+    raw: was.raw,
+    begin: fail,
+    quad: fail,
+    quads: fail,
+    copies: fail,
+    setBlend: fail,
+    setClip: fail,
+    setTarget: fail,
+    setShader: fail,
+    disposeTarget: () => {},
+    end: fail,
+    resize: () => {},
+    invalidate: () => {},
+    dispose: () => {},
+  };
+}
 
 function intersect(a: ClipRect, b: ClipRect): ClipRect {
   const x = Math.max(a.x, b.x);

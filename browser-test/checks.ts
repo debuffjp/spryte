@@ -41,6 +41,8 @@ async function render(scene: (draw: Draw) => void, backend: "webgl2" | "2d" = "w
     out = flipped;
   } else out = new Uint8Array(raw.ctx.getImageData(0, 0, W, H).data.buffer);
   draw.dispose();
+  // Release the GPU context now: Chrome caps live WebGL contexts, and past the cap it won't restore lost ones.
+  if (raw.kind === "webgl2") raw.gl.getExtension("WEBGL_lose_context")?.loseContext();
   return out;
 }
 
@@ -248,6 +250,127 @@ vec4 effect(vec4 color, vec2 uv) {
     pixelAt(inTarget, 15, 15).join() === "0,255,0,255" && pixelAt(inTarget, 45, 15).join() === "255,0,0,255",
     `${pixelAt(inTarget, 15, 15)} / ${pixelAt(inTarget, 45, 15)}`,
   );
+}
+
+// ---- Adversarial QA (expected to FAIL on the current source) ----
+{
+  // sprites() with count > positions.length / 2: the copies that exist should still draw.
+  for (const backend of ["webgl2", "2d"] as const) {
+    const two = new Float32Array([20, 20, 50, 20]);
+    const px = await render((draw) => draw.sprites(img, two, 5), backend, 1);
+    check(
+      `ADV sprites() with count beyond positions still draws the real copies (${backend})`,
+      pixelAt(px, 20, 20).join() !== "16,32,48,255" && pixelAt(px, 50, 20).join() !== "16,32,48,255",
+      `${pixelAt(px, 20, 20)} / ${pixelAt(px, 50, 20)}`,
+    );
+  }
+
+  // A render target larger than MAX_TEXTURE_SIZE must fail loudly, not draw nothing silently.
+  let error = "";
+  await render(
+    (draw) => {
+      const gl = (draw.raw as { gl: WebGL2RenderingContext }).gl;
+      const max = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+      try {
+        const t = draw.createTarget(max * 2, 4);
+        draw.into(t, () => draw.rect(0, 0, 4, 4, "#f00"));
+        draw.sprite(t, 0, 0, { origin: [0, 0] });
+      } catch (e) {
+        error = String(e);
+      }
+    },
+    "webgl2",
+    1,
+  );
+  check("ADV oversized render target throws", error !== "", JSON.stringify(error.slice(0, 80)));
+
+  // Same scene on both backends: smooth sprite after a clip that drew smooth sprites.
+  const big = document.createElement("canvas");
+  big.width = 4;
+  big.height = 4;
+  const g = big.getContext("2d") as CanvasRenderingContext2D;
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, 2, 4);
+  g.fillStyle = "#000";
+  g.fillRect(2, 0, 2, 4);
+  const clipScene = (draw: Draw) => {
+    draw.sprite(big, 10, 10); // nearest
+    draw.clip(0, 0, 40, 40, () => draw.sprite(big, 20, 20, { smooth: true, scaleX: 8, scaleY: 8 }));
+    draw.sprite(big, 100, 60, { smooth: true, scaleX: 8, scaleY: 8 });
+  };
+  const gl2 = await render(clipScene, "webgl2", 1);
+  const c2d = await render(clipScene, "2d", 1);
+  // Compare only the last sprite's area, where filtering decides the gradient.
+  let differ = 0;
+  for (let y = 46; y < 74; y++)
+    for (let x = 86; x < 114; x++) {
+      const a = pixelAt(gl2, x, y);
+      const b = pixelAt(c2d, x, y);
+      if (Math.abs((a[0] as number) - (b[0] as number)) > 24) differ++;
+    }
+  check("ADV Canvas 2D smoothing survives a clip (matches WebGL2)", differ < 20, `${differ} px differ by > 24`);
+}
+
+// Real context loss (WEBGL_lose_context): drawing while lost is skipped without errors, and after restore
+// the same scene draws the same pixels as a fresh renderer. Render targets come back blank (documented).
+{
+  const read = (gl: WebGL2RenderingContext) => {
+    const out = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    return out;
+  };
+  const scene = (draw: Draw) => {
+    busy(draw);
+    draw.sprites(img, pos, 20, { tint: "#8f8" }, { scale: new Float32Array(20).fill(1.5) });
+  };
+  const fresh = await render(scene, "webgl2", 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const draw = createRenderer(canvas, { backend: "webgl2", smooth: false });
+  const raw = draw.raw;
+  if (raw.kind !== "webgl2") throw new Error("needs WebGL2");
+  const gl = raw.gl;
+  const ext = gl.getExtension("WEBGL_lose_context");
+  const frame = () => {
+    draw.resize(W, H);
+    draw.begin("#102030", W, H, 1);
+    scene(draw);
+    draw.end();
+  };
+  frame();
+  const event = (name: string) =>
+    new Promise<string>((r) => {
+      canvas.addEventListener(name, () => r("fired"), { once: true });
+      setTimeout(() => r("timed out"), 3000);
+    });
+  const lost = event("webglcontextlost");
+  ext?.loseContext();
+  const lostState = await lost;
+  let threwWhileLost = false;
+  try {
+    frame();
+  } catch {
+    threwWhileLost = true;
+  }
+  // A restore requested straight after the loss never fired webglcontextrestored here; real losses last a while.
+  await new Promise((r) => setTimeout(r, 250));
+  const restored = event("webglcontextrestored");
+  ext?.restoreContext();
+  const restoredState = await restored;
+  await new Promise((r) => setTimeout(r, 0));
+  frame();
+  const after = read(gl);
+  // readPixels is bottom row first; flip to compare with render()'s top-down output.
+  const flipped = new Uint8Array(after.length);
+  for (let y = 0; y < H; y++) flipped.set(after.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+  check(
+    "context loss: no throw while lost",
+    !!ext && !threwWhileLost && draw.contextLost === false,
+    ext ? `lost ${lostState}, restored ${restoredState}, contextLost after: ${draw.contextLost}` : "WEBGL_lose_context unavailable",
+  );
+  record("context loss: same pixels after restore as a fresh renderer", fresh, flipped);
+  draw.dispose();
 }
 
 (window as unknown as { __checks: unknown }).__checks = results;

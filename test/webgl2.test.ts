@@ -22,6 +22,8 @@ function fakeGL() {
     drawingBufferHeight: 50,
     getShaderParameter: () => true,
     getProgramParameter: () => true,
+    checkFramebufferStatus: () => "FRAMEBUFFER_COMPLETE",
+    getParameter: (p: unknown) => (p === "MAX_TEXTURE_SIZE" ? 16384 : undefined),
     getUniformLocation: () => ({}),
     shaderSource: (_s: unknown, src: string) => shaderSources.push(src),
   };

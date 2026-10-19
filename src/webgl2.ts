@@ -629,10 +629,11 @@ export class WebGL2Backend implements Backend {
   setShader(shader: Shader | null): void {
     if (shader === this.shader) return;
     this.flush();
+    // Compile before changing any state: a shader that fails to compile throws and leaves the renderer as it was.
+    const next = this.lost ? null : shader ? this.custom(shader) : this.main;
     if (this.shader) this.shader.onChange = undefined;
     this.shader = shader;
-    if (this.lost) return;
-    const next = shader ? this.custom(shader) : this.main;
+    if (!next) return;
     this.active = next;
     this.gl.useProgram(next.program);
     // Uniform changes flush the batch drawn with the old values first.
@@ -686,6 +687,9 @@ export class WebGL2Backend implements Backend {
     let store = this.targets.get(target);
     if (store) return store;
     const gl = this.gl;
+    const max = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    if (target.width > max || target.height > max)
+      throw new Error(`spryte: render target ${target.width}×${target.height} is larger than this GPU's limit of ${max}×${max}`);
     const tex = gl.createTexture();
     const fbo = gl.createFramebuffer();
     if (!tex || !fbo) throw new Error("WebGL2: could not create a render target");
@@ -696,6 +700,15 @@ export class WebGL2Backend implements Backend {
     const previous = this.target ? (this.targets.get(this.target)?.fbo ?? null) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
+      gl.deleteFramebuffer(fbo);
+      gl.deleteTexture(tex);
+      throw new Error(
+        `spryte: render target ${target.width}×${target.height} could not be created (framebuffer status 0x${status.toString(16)})`,
+      );
+    }
     // Start transparent, not with whatever the driver left in that memory.
     const scissor = gl.isEnabled(gl.SCISSOR_TEST);
     if (scissor) gl.disable(gl.SCISSOR_TEST);
@@ -910,16 +923,32 @@ function link(gl: WebGL2RenderingContext, vs: string, fs: string, label = "WebGL
     if (!shader) throw new Error("WebGL2: could not create shader");
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
-      throw new Error(`spryte: ${label} failed to compile:\n${gl.getShaderInfoLog(shader)}`);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader);
+      gl.deleteShader(shader);
+      throw new Error(`spryte: ${label} failed to compile:\n${log}`);
+    }
     return shader;
   };
+  const vertex = compile(gl.VERTEX_SHADER, vs);
+  let fragment: WebGLShader;
+  try {
+    fragment = compile(gl.FRAGMENT_SHADER, fs);
+  } catch (e) {
+    gl.deleteShader(vertex);
+    throw e;
+  }
   const program = gl.createProgram();
-  const shaders = [compile(gl.VERTEX_SHADER, vs), compile(gl.FRAGMENT_SHADER, fs)];
-  for (const shader of shaders) gl.attachShader(program, shader);
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
   gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`WebGL2 program: ${gl.getProgramInfoLog(program)}`);
-  // The linked program keeps the compiled code; the shader objects can go.
-  for (const shader of shaders) gl.deleteShader(shader);
+  // The linked program keeps the compiled code; the shader objects can go either way.
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`spryte: ${label} failed to link:\n${log}`);
+  }
   return program;
 }

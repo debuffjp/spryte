@@ -29,16 +29,16 @@ requestAnimationFrame(frame);
 
 ## Why spryte
 
-Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved rounds, with pixel parity checked first (desktop Chrome, RTX 5060 laptop). Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
+Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved rounds, after a pixel-parity gate (desktop Chrome, RTX 5060 laptop). The comparison survived an adversarial fairness review, which lowered two of our earlier numbers. Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
 
 | | spryte | PixiJS 8 | |
 | --- | --- | --- | --- |
-| JS at startup (brotli) | **8.4 kB** | 87.8 kB | 10× smaller |
-| 200k particles, per-particle scale, rotation, tint and alpha | **7.3 ms** | 31.0 ms (`ParticleContainer`) | 4.2× faster |
-| 50k sprites with rotation, scale and tint, one call each | **8.6 ms** | 33.1 ms (`Sprite`) | 3.8× faster |
-| 200k sprites, position only, bulk | **4.4 ms** | 8.1 ms (`ParticleContainer`) | 1.8× faster |
+| JS at startup (brotli) | **10.1 kB** | 87.8 kB | ~9× smaller |
+| 200k particles, per-particle scale, rotation, tint and alpha all changing | **7.7 ms** | 28.9 ms (`ParticleContainer`) | 3.8× faster |
+| 50k sprites with rotation, scale and tint, one call each | **9.8 ms** | 32.3 ms (`Sprite`) | 3.3× faster |
+| 200k sprites, position only, bulk | **4.4 ms** | 8.9 ms (`ParticleContainer`) | 2.0× faster |
 
-- **Bulk sprites with no per-sprite JavaScript.** Pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
+- **Bulk sprites with no per-sprite JavaScript.** On WebGL2, pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
 - **Immediate mode.** There are no display objects to create, pool or destroy. Draw what you want this frame.
 - **Verified output.** Real-GPU pixel checks prove that the bulk paths, render targets and shaders draw exactly what the simple path draws.
 
@@ -64,8 +64,8 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 - You own the canvas size. After changing `canvas.width` or `canvas.height`, call `draw.resize(w, h)`.
 - Each frame: `draw.begin(...)`, then your draw calls in order, then `draw.end()`. Call order is draw order.
 - `draw.invalidate(source)` re-uploads an image whose pixels changed. `draw.disposeTarget(t)` frees a render target.
-- `draw.dispose()` releases every GPU resource and listener.
-- WebGL context loss is handled: drawing pauses while the context is lost (`draw.contextLost`), and textures re-upload after it's restored.
+- `draw.dispose()` releases every GPU resource and listener. Using a disposed `Draw` throws.
+- WebGL context loss is handled: drawing pauses while the context is lost (`draw.contextLost`), and textures re-upload after it's restored. Render targets come back blank. This is checked with a real GPU context loss in `npm run test:browser`.
 
 ## Licence
 

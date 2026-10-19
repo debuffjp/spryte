@@ -10,6 +10,7 @@ export class RenderTarget {
     readonly width: number,
     readonly height: number,
   ) {
-    if (!(width > 0 && height > 0)) throw new Error(`spryte: render target size must be positive, got ${width}×${height}`);
+    if (!(Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0))
+      throw new Error(`spryte: render target size must be positive whole pixels, got ${width}×${height}`);
   }
 }
