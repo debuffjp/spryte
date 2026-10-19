@@ -2,7 +2,9 @@
 import { createRenderer } from "spryte";
 
 const canvas = document.querySelector("canvas") as HTMLCanvasElement;
-const draw = createRenderer(canvas);
+// ?backend=2d forces the Canvas 2D fallback, to compare the two.
+const backend = new URLSearchParams(location.search).get("backend") === "2d" ? "2d" : "auto";
+const draw = createRenderer(canvas, { backend });
 
 // A 16x16 sprite made at runtime, so the example has no assets.
 const dot = new OffscreenCanvas(16, 16);
