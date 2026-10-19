@@ -44,7 +44,7 @@ Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved 
 
 ![Frame time by sprite count for dynamic particles: spryte and PixiJS, with the 60 fps budget](docs/charts/particles.svg)
 
-*Charts from [2dbench](https://github.com/debuffjp/2dbench) (7 rounds; the table above is spryte's own bench, 3 rounds). Lower lines are faster; the dashed line is the 60 fps budget.*
+*Charts from [2dbench](https://github.com/debuffjp/2dbench) (3–7 rounds depending on the scene; the table above is spryte's own bench, 3 rounds). Lower lines are faster; the dashed line is the 60 fps budget.*
 
 In [2dbench](https://github.com/debuffjp/2dbench)'s raycaster scene (a retro first-person maze drawn as thousands of texture slices), spryte held 10,000 enemies at 60 fps against PixiJS `Sprite`'s 2,000. The gap is per-sprite work: a PixiJS `Sprite` is a scene-graph object updated, bounded and batched every frame, while spryte writes a few numbers per sprite into a typed array and the GPU expands them. Static scenes, where PixiJS can cache, are much closer.
 
