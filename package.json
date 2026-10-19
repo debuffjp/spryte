@@ -15,12 +15,11 @@
     "browser-game"
   ],
   "license": "MIT",
-  "homepage": "https://debuff.jp",
-  "bugs": "https://github.com/debuffjp/debuff/issues",
+  "homepage": "https://github.com/debuffjp/spryte#readme",
+  "bugs": "https://github.com/debuffjp/spryte/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/debuffjp/debuff.git",
-    "directory": "packages/spryte"
+    "url": "git+https://github.com/debuffjp/spryte.git"
   },
   "type": "module",
   "sideEffects": false,
@@ -34,12 +33,22 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "example": "vite examples/minimal"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
   }
 }
