@@ -95,6 +95,8 @@ export class WebGL2Backend implements Backend {
   private readonly units: (WebGLTexture | null)[] = new Array(UNITS).fill(null);
   private readonly unitSmooth: boolean[] = new Array(UNITS).fill(false);
   private unitCount = 0;
+  private lastUnit = 0;
+  private lastSmooth = false;
   private lastSrc: TextureSource | null = null;
   private last: CachedTexture | undefined;
   private count = 0;
@@ -193,22 +195,30 @@ export class WebGL2Backend implements Backend {
     if (this.lost) return;
     // Fast path: consecutive draws from the same source skip the texture lookup.
     const t = src === null ? this.white : src === this.lastSrc && this.last ? this.last : this.texture(src);
+    const sameAsLast = t === this.last;
     this.lastSrc = src;
     this.last = t;
     if (this.count === this.capacity) this.flush();
-    let unit = -1;
-    for (let i = 0; i < this.unitCount; i++) {
-      if (this.units[i] === t.tex && this.unitSmooth[i] === smooth) {
-        unit = i;
-        break;
+    // Same texture and filter as the previous quad in this batch: same unit.
+    let unit =
+      sameAsLast && smooth === this.lastSmooth && this.lastUnit < this.unitCount && this.units[this.lastUnit] === t.tex
+        ? this.lastUnit
+        : -1;
+    if (unit < 0)
+      for (let i = 0; i < this.unitCount; i++) {
+        if (this.units[i] === t.tex && this.unitSmooth[i] === smooth) {
+          unit = i;
+          break;
+        }
       }
-    }
     if (unit < 0) {
       if (this.unitCount === UNITS) this.flush();
       unit = this.unitCount++;
       this.units[unit] = t.tex;
       this.unitSmooth[unit] = smooth;
     }
+    this.lastUnit = unit;
+    this.lastSmooth = smooth;
     const f = this.count * (STRIDE / 4);
     const { f32 } = this;
     f32[f] = m[0];

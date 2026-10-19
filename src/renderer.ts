@@ -19,27 +19,6 @@ export interface RendererOptions {
  */
 export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptions = {}): Draw {
   const choice = options.backend ?? "auto";
-  let draw: Draw | undefined;
-  const backend = createBackend(canvas, choice, (fallback) => draw?.setBackend(fallback));
-  draw = new Draw(backend, options.smooth ?? true);
-  return draw;
-}
-
-/** Stands in while the Canvas 2D fallback loads (a few milliseconds, on browsers without WebGL2): draws nothing. */
-const PENDING = {
-  kind: "2d",
-  raw: null,
-  begin() {},
-  quad() {},
-  setBlend() {},
-  setClip() {},
-  end() {},
-  resize() {},
-  invalidate() {},
-  dispose() {},
-} as unknown as Backend;
-
-function createBackend(canvas: HTMLCanvasElement, choice: "auto" | "webgl2" | "2d", ready: (backend: Backend) => void): Backend {
   if (choice !== "2d") {
     // alpha:false lets the compositor skip blending; desynchronized lowers input latency where supported.
     // preserveDrawingBuffer:false is fastest; captures render and read in the same task.
@@ -50,11 +29,38 @@ function createBackend(canvas: HTMLCanvasElement, choice: "auto" | "webgl2" | "2
       desynchronized: true,
       powerPreference: "high-performance",
     });
-    if (gl) return new WebGL2Backend(gl);
-    if (choice === "webgl2") throw new Error("WebGL2 is unavailable in this browser");
+    if (gl) return new Draw(new WebGL2Backend(gl), options.smooth ?? true);
+    if (choice === "webgl2")
+      throw new Error('spryte: WebGL2 is unavailable in this browser (use backend: "auto" to fall back to Canvas 2D)');
   }
   const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
-  if (!ctx) throw new Error("No WebGL2 or Canvas 2D context available");
-  import("./canvas2d.js").then((m) => ready(new m.Canvas2DBackend(ctx)));
-  return PENDING;
+  if (!ctx) throw new Error("spryte: no WebGL2 or Canvas 2D context available (is the canvas already using another context type?)");
+  const draw = new Draw(pending(ctx), options.smooth ?? true);
+  draw.ready = import("./canvas2d.js").then(
+    (m) => draw.setBackend(new m.Canvas2DBackend(ctx)),
+    (cause) => {
+      throw new Error("spryte: the Canvas 2D fallback failed to load", { cause });
+    },
+  );
+  return draw;
+}
+
+/**
+ * Stands in while the Canvas 2D fallback loads (a few milliseconds, on browsers without WebGL2): draws nothing,
+ * but `raw` is already the real context.
+ */
+function pending(ctx: CanvasRenderingContext2D): Backend {
+  const noop = () => {};
+  return {
+    kind: "2d",
+    raw: { kind: "2d", ctx },
+    begin: noop,
+    quad: noop,
+    setBlend: noop,
+    setClip: noop,
+    end: noop,
+    resize: noop,
+    invalidate: noop,
+    dispose: noop,
+  };
 }

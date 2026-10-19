@@ -61,6 +61,8 @@ export class Draw {
   private depth = 0;
   private readonly m: Matrix = [1, 0, 0, 1, 0, 0];
   private readonly frames = new WeakMap<TextureSource, Frame>();
+  private lastImage: TextureSource | null = null;
+  private lastFrame: Frame | undefined;
   private readonly clips: ClipRect[] = [];
   private readonly tmp: Matrix = [1, 0, 0, 1, 0, 0];
   private readonly textCache = new TextCache();
@@ -85,6 +87,12 @@ export class Draw {
   get drawCalls(): number {
     return this.backend.drawCalls ?? this.quads;
   }
+
+  /**
+   * Resolves once the backend can draw. Immediate on WebGL2; on the Canvas 2D fallback, once its chunk has
+   * loaded (frames before that draw nothing). Rejects if the fallback fails to load.
+   */
+  ready: Promise<void> = Promise.resolve();
 
   /** Raw `WebGL2RenderingContext` or `CanvasRenderingContext2D`. Mixing raw calls with `draw` calls requires care. */
   get raw(): RawContext {
@@ -395,11 +403,15 @@ export class Draw {
   }
 
   private wholeImage(image: TextureSource): Frame {
+    // Loops usually draw one image many times in a row; skip the WeakMap for repeats.
+    if (image === this.lastImage && this.lastFrame) return this.lastFrame;
     let f = this.frames.get(image);
     if (!f) {
       f = wholeImage(image);
       this.frames.set(image, f);
     }
+    this.lastImage = image;
+    this.lastFrame = f;
     return f;
   }
 
