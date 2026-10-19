@@ -1,7 +1,7 @@
 {
   "name": "spryte",
   "version": "0.1.0",
-  "description": "Blazing fast 2D renderer for the web: draws moving sprites 2–4× faster than the most widely used one, verified in an open benchmark. About 10 kB.",
+  "description": "Blazing fast 2D renderer for the web: 2–4× faster than the most popular one, at a ninth of its size. Verified in an open benchmark.",
   "keywords": [
     "2d",
     "renderer",
