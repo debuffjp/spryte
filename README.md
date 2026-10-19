@@ -27,7 +27,7 @@ function frame() {
 requestAnimationFrame(frame);
 ```
 
-A runnable version is in [`examples/minimal`](examples/minimal).
+A runnable version is in [`examples/minimal`](examples/minimal) (`npm run example`; add `?backend=2d` to see the fallback). Full reference: [docs/api.md](docs/api.md). How it works: [docs/architecture.md](docs/architecture.md).
 
 ## Lifecycle
 
