@@ -1,4 +1,5 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
+import { RenderTarget } from "./target.js";
 
 /** Texture units sampled per batch. 8 is guaranteed on every WebGL2 implementation's fragment stage (min 16). */
 const UNITS = 8;
@@ -97,9 +98,11 @@ const STRIDE = FLOATS * 4 + 4;
 
 interface CachedTexture {
   tex: WebGLTexture;
-  /** 1 / width and 1 / height, so UV maths multiplies instead of divides. */
+  /** 1 / width and ±1 / height, so UV maths multiplies instead of divides. */
   iw: number;
   ih: number;
+  /** v at the image's top row: 0, or 1 for render targets, which WebGL stores bottom row first (`ih` is then negative). */
+  v0: number;
 }
 
 /** Instanced, multi-texture WebGL2 sprite batcher behind the `draw` API. */
@@ -124,6 +127,11 @@ export class WebGL2Backend implements Backend {
   private quadBuffer!: WebGLBuffer;
   private copies!: CopyPipeline;
   private staging = new Float32Array(0);
+  private readonly targets = new Map<RenderTarget, { fbo: WebGLFramebuffer; cached: CachedTexture }>();
+  /** Where drawing goes: a render target, or null for the canvas. */
+  private target: RenderTarget | null = null;
+  /** Height in pixels of the current destination, for flipping scissor rectangles. */
+  private outH = 1;
   private viewW = 1;
   private viewH = 1;
   /** True between webglcontextlost and webglcontextrestored: drawing is skipped. */
@@ -135,7 +143,10 @@ export class WebGL2Backend implements Backend {
   };
   private readonly onRestored = () => {
     // Every GPU object died with the context. Sources are still in memory, so textures re-upload lazily.
+    // Render targets come back blank.
     this.textures.clear();
+    this.targets.clear();
+    this.target = null;
     this.lastSrc = null;
     this.last = undefined;
     this.count = 0;
@@ -175,6 +186,7 @@ export class WebGL2Backend implements Backend {
   /** Create program, buffers and the white texture. Runs at start and after a context restore. */
   private setup(): void {
     const gl = this.gl;
+    this.outH = gl.drawingBufferHeight;
     const program = link(gl, VERT, FRAG);
     this.program = program;
     gl.useProgram(program);
@@ -216,7 +228,7 @@ export class WebGL2Backend implements Backend {
     if (!whiteTex) throw new Error("WebGL2: could not create texture");
     gl.bindTexture(gl.TEXTURE_2D, whiteTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-    this.white = { tex: whiteTex, iw: 1, ih: 1 };
+    this.white = { tex: whiteTex, iw: 1, ih: 1, v0: 0 };
     this.wrap();
     this.nearest = sampler(gl, gl.NEAREST);
     this.linear = sampler(gl, gl.LINEAR);
@@ -228,6 +240,9 @@ export class WebGL2Backend implements Backend {
   begin(clear: number, width: number, height: number): void {
     if (this.lost) return;
     const gl = this.gl;
+    if (this.target) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.target = null;
+    this.outH = gl.drawingBufferHeight;
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform2f(this.viewLoc, width, height);
     this.viewW = width;
@@ -250,6 +265,7 @@ export class WebGL2Backend implements Backend {
   ): void {
     if (this.lost) return;
     // Fast path: consecutive draws from the same source skip the texture lookup.
+    if (src !== null && src === this.target) throw new Error("spryte: can't draw a render target into itself");
     const t = src === null ? this.white : src === this.lastSrc && this.last ? this.last : this.texture(src);
     const sameAsLast = t === this.last;
     this.lastSrc = src;
@@ -284,9 +300,9 @@ export class WebGL2Backend implements Backend {
     f32[f + 4] = m[3];
     f32[f + 5] = m[5];
     f32[f + 6] = sx * t.iw;
-    f32[f + 7] = sy * t.ih;
+    f32[f + 7] = t.v0 + sy * t.ih;
     f32[f + 8] = (sx + sw) * t.iw;
-    f32[f + 9] = (sy + sh) * t.ih;
+    f32[f + 9] = t.v0 + (sy + sh) * t.ih;
     f32[f + 10] = flash;
     f32[f + 11] = unit;
     // Bytes in memory must read R, G, B, A; Uint32 is little-endian.
@@ -313,6 +329,7 @@ export class WebGL2Backend implements Backend {
     snap: boolean,
   ): void {
     if (this.lost || count <= 0) return;
+    if (src === this.target) throw new Error("spryte: can't draw a render target into itself");
     // Draw order: everything queued so far goes first.
     this.flush();
     const gl = this.gl;
@@ -326,7 +343,7 @@ export class WebGL2Backend implements Backend {
     gl.uniform4f(c.quad, t[0], t[1], t[2], t[3]);
     gl.uniform2f(c.origin, t[4], t[5]);
     gl.uniform4f(c.linear, m[0], m[1], m[2], m[3]);
-    gl.uniform4f(c.uv, sx * tex.iw, sy * tex.ih, (sx + sw) * tex.iw, (sy + sh) * tex.ih);
+    gl.uniform4f(c.uv, sx * tex.iw, tex.v0 + sy * tex.ih, (sx + sw) * tex.iw, tex.v0 + (sy + sh) * tex.ih);
     gl.uniform4f(c.color, (color >>> 24) / 255, ((color >>> 16) & 0xff) / 255, ((color >>> 8) & 0xff) / 255, (color & 0xff) / 255);
     gl.uniform1f(c.flash, flash);
     gl.uniform1f(c.snap, snap ? 1 : 0);
@@ -366,7 +383,7 @@ export class WebGL2Backend implements Backend {
     }
     gl.enable(gl.SCISSOR_TEST);
     // WebGL's scissor origin is bottom-left.
-    gl.scissor(rect.x, gl.drawingBufferHeight - rect.y - rect.h, rect.w, rect.h);
+    gl.scissor(rect.x, this.outH - rect.y - rect.h, rect.w, rect.h);
   }
 
   end(): void {
@@ -379,6 +396,8 @@ export class WebGL2Backend implements Backend {
   }
 
   invalidate(src: TextureSource): void {
+    // A target's texture is its contents: there is nothing to re-upload.
+    if (src instanceof RenderTarget) return;
     const cached = this.textures.get(src);
     if (!cached) return;
     this.flush();
@@ -401,13 +420,87 @@ export class WebGL2Backend implements Backend {
       gl.deleteBuffer(this.quadBuffer);
       gl.deleteVertexArray(this.vao);
       gl.deleteProgram(this.program);
+      for (const { fbo } of this.targets.values()) gl.deleteFramebuffer(fbo);
       gl.deleteProgram(this.copies.program);
       gl.deleteVertexArray(this.copies.vao);
       gl.deleteBuffer(this.copies.buffer);
     }
     this.textures.clear();
+    this.targets.clear();
     this.lastSrc = null;
     this.last = undefined;
+  }
+
+  setTarget(target: RenderTarget | null, clear: number | null, width: number, height: number): void {
+    if (this.lost) {
+      this.target = target;
+      return;
+    }
+    this.flush();
+    const gl = this.gl;
+    if (target) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.targetStore(target).fbo);
+      gl.viewport(0, 0, target.width, target.height);
+      this.outH = target.height;
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      this.outH = gl.drawingBufferHeight;
+    }
+    this.target = target;
+    gl.uniform2f(this.viewLoc, width, height);
+    this.viewW = width;
+    this.viewH = height;
+    if (clear !== null) {
+      gl.clearColor((clear >>> 24) / 255, ((clear >>> 16) & 0xff) / 255, ((clear >>> 8) & 0xff) / 255, (clear & 0xff) / 255);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+  }
+
+  disposeTarget(target: RenderTarget): void {
+    if (target === this.target) throw new Error("spryte: can't dispose a render target while drawing into it");
+    const store = this.targets.get(target);
+    if (!store) return;
+    this.flush();
+    if (!this.lost) {
+      this.gl.deleteFramebuffer(store.fbo);
+      this.gl.deleteTexture(store.cached.tex);
+    }
+    this.targets.delete(target);
+    this.textures.delete(target);
+    if (this.lastSrc === target) {
+      this.lastSrc = null;
+      this.last = undefined;
+    }
+  }
+
+  /** A target's framebuffer and texture, created on first use. */
+  private targetStore(target: RenderTarget): { fbo: WebGLFramebuffer; cached: CachedTexture } {
+    let store = this.targets.get(target);
+    if (store) return store;
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    const fbo = gl.createFramebuffer();
+    if (!tex || !fbo) throw new Error("WebGL2: could not create a render target");
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, target.width, target.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    this.wrap();
+    const previous = this.target ? (this.targets.get(this.target)?.fbo ?? null) : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    // Start transparent, not with whatever the driver left in that memory.
+    const scissor = gl.isEnabled(gl.SCISSOR_TEST);
+    if (scissor) gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (scissor) gl.enable(gl.SCISSOR_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
+    // Rendered contents are already premultiplied, and stored bottom row first.
+    store = { fbo, cached: { tex, iw: 1 / target.width, ih: -1 / target.height, v0: 1 } };
+    this.targets.set(target, store);
+    this.textures.set(target, store.cached);
+    return store;
   }
 
   private copyPipeline(quad: WebGLBuffer): CopyPipeline {
@@ -469,6 +562,7 @@ export class WebGL2Backend implements Backend {
   private texture(src: TextureSource): CachedTexture {
     const hit = this.textures.get(src);
     if (hit) return hit;
+    if (src instanceof RenderTarget) return this.targetStore(src).cached;
     const gl = this.gl;
     const tex = gl.createTexture();
     if (!tex) throw new Error("WebGL2: could not create texture");
@@ -479,7 +573,7 @@ export class WebGL2Backend implements Backend {
     this.wrap();
     const w = "naturalWidth" in src ? src.naturalWidth : src.width;
     const h = "naturalHeight" in src ? src.naturalHeight : src.height;
-    const cached = { tex, iw: 1 / w, ih: 1 / h };
+    const cached = { tex, iw: 1 / w, ih: 1 / h, v0: 0 };
     this.textures.set(src, cached);
     // Unit 0 is now bound to this texture; the next flush rebinds whatever the batch needs.
     return cached;

@@ -1,6 +1,7 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import type { BitmapFont } from "./bitmap-font.js";
 import { type Color, toRGBA } from "./color.js";
+import { RenderTarget } from "./target.js";
 
 /** A rectangular region of an image, in source pixels. */
 export interface Frame {
@@ -64,6 +65,11 @@ export class Draw {
   private lastImage: TextureSource | null = null;
   private lastFrame: Frame | undefined;
   private readonly clips: ClipRect[] = [];
+  /** The render target being drawn into, or null for the canvas. */
+  private target: RenderTarget | null = null;
+  /** The canvas's logical size this frame, to switch back to after `into()`. */
+  private viewW = 1;
+  private viewH = 1;
   private readonly tmp: Matrix = [1, 0, 0, 1, 0, 0];
   private readonly textCache = new TextCache();
   private circleTexture: HTMLCanvasElement | OffscreenCanvas | undefined;
@@ -368,6 +374,71 @@ export class Draw {
     }
   }
 
+  // ---- render targets ----------------------------------------------------------------------
+
+  /** An offscreen image of `width × height` pixels to draw into with `into()`, then draw like any image. */
+  createTarget(width: number, height: number): RenderTarget {
+    return new RenderTarget(width, height);
+  }
+
+  /**
+   * Run `fn` with drawing going into `target` instead of the canvas, then switch back. Inside, units are the
+   * target's pixels from its top-left; the transform, clips and global alpha start fresh and are restored
+   * afterwards. `clear` fills the target first (default transparent); pass `null` to draw over what's there,
+   * for trails and accumulation. Nests.
+   *
+   * ```ts
+   * const glow = draw.createTarget(160, 90);
+   * draw.into(glow, () => draw.sprites(spark, sparks, n, { tint: "#ffd36b" }));
+   * draw.blend("add");
+   * draw.sprite(glow, 160, 90, { scaleX: 2, scaleY: 2, smooth: true });
+   * ```
+   */
+  into(target: RenderTarget, fn: () => void, clear: Color | null = 0): void {
+    const outer = this.target;
+    const outerW = outer ? outer.width : this.viewW;
+    const outerH = outer ? outer.height : this.viewH;
+    const outerScale = this.renderScale;
+    const outerAlpha = this.alpha;
+    const outerClips = this.clips.splice(0);
+    if (outerClips.length) this.backend.setClip(null);
+    const depth = this.depth;
+    this.push();
+    copy(IDENTITY, this.m);
+    this.alpha = 1;
+    this.renderScale = 1;
+    this.target = target;
+    this.backend.setTarget(target, clear === null ? null : toRGBA(clear), target.width, target.height);
+    try {
+      fn();
+    } finally {
+      if (this.clips.length) {
+        this.clips.length = 0;
+        this.backend.setClip(null);
+      }
+      this.target = outer;
+      this.backend.setTarget(outer, null, outerW, outerH);
+      this.clips.push(...outerClips);
+      const clip = outerClips.at(-1);
+      if (clip) this.backend.setClip(clip);
+      // Unbalanced push() calls inside fn don't leak out.
+      this.depth = depth + 1;
+      this.pop();
+      this.alpha = outerAlpha;
+      this.renderScale = outerScale;
+    }
+  }
+
+  /** Free a target's GPU memory. Drawing it afterwards recreates it, blank. */
+  disposeTarget(target: RenderTarget): void {
+    this.backend.disposeTarget(target);
+  }
+
+  /** True while the WebGL context is lost (e.g. a backgrounded mobile tab): frames draw nothing until it's restored. */
+  get contextLost(): boolean {
+    return this.backend.contextLost ?? false;
+  }
+
   /** Re-upload a source whose pixels changed (e.g. a canvas you draw into). */
   invalidate(src: TextureSource): void {
     this.backend.invalidate(src);
@@ -381,6 +452,9 @@ export class Draw {
   /** @internal */
   begin(clear: Color, width: number, height: number, scale: number): void {
     this.renderScale = scale;
+    this.viewW = width;
+    this.viewH = height;
+    this.target = null;
     this.quads = 0;
     this.depth = 0;
     this.clips.length = 0;

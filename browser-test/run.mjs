@@ -21,7 +21,7 @@ try {
     // A blank render would also "match": require that something was drawn.
     const ok = r.differing === 0 && r.nonBackground > 100;
     if (!ok) failed = true;
-    console.log(`${ok ? "pass" : "FAIL"}  sprites() == sprite() loop: ${r.name} (${r.differing} px differ, ${r.nonBackground} px drawn)`);
+    console.log(`${ok ? "pass" : "FAIL"}  ${r.name} (${r.differing} px differ, ${r.nonBackground} px drawn)`);
   }
 } finally {
   await browser.close();

@@ -1,5 +1,8 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import { rgbaToCss } from "./color.js";
+import { RenderTarget } from "./target.js";
+
+type Surface = HTMLCanvasElement | OffscreenCanvas;
 
 /**
  * Canvas 2D fallback for the `draw` API. Same output for solid shapes, sprites, text and alpha.
@@ -9,7 +12,12 @@ import { rgbaToCss } from "./color.js";
 export class Canvas2DBackend implements Backend {
   readonly kind = "2d" as const;
   readonly raw: RawContext;
-  private readonly ctx: CanvasRenderingContext2D;
+  /** Where drawing goes: the canvas's context, or a render target's while inside `draw.into`. */
+  private ctx: CanvasRenderingContext2D;
+  private readonly screen: CanvasRenderingContext2D;
+  private screenScale = 1;
+  private readonly surfaces = new WeakMap<RenderTarget, Surface>();
+  private target: RenderTarget | null = null;
   private scale = 1;
   private smoothing: boolean | undefined;
   private scratch: HTMLCanvasElement | OffscreenCanvas | undefined;
@@ -18,11 +26,15 @@ export class Canvas2DBackend implements Backend {
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+    this.screen = ctx;
     this.raw = { kind: "2d", ctx };
   }
 
   begin(clear: number, width: number, height: number, scale: number): void {
+    this.ctx = this.screen;
+    this.target = null;
     this.scale = scale;
+    this.screenScale = scale;
     const ctx = this.ctx;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.globalAlpha = 1;
@@ -42,6 +54,7 @@ export class Canvas2DBackend implements Backend {
     flash: number,
     smooth: boolean,
   ): void {
+    if (src !== null && src === this.target) throw new Error("spryte: can't draw a render target into itself");
     const ctx = this.ctx;
     const s = this.scale;
     ctx.setTransform(m[0] * s, m[1] * s, m[2] * s, m[3] * s, m[4] * s, m[5] * s);
@@ -55,12 +68,13 @@ export class Canvas2DBackend implements Backend {
       ctx.imageSmoothingEnabled = smooth;
       this.smoothing = smooth;
     }
+    const image = src instanceof RenderTarget ? this.surface(src) : src;
     ctx.globalAlpha = (color & 0xff) / 255;
-    if (color >>> 8 === 0xffffff) ctx.drawImage(src, sx, sy, sw, sh, 0, 0, 1, 1);
-    else ctx.drawImage(this.tinted(src, sx, sy, sw, sh, color), 0, 0, sw, sh, 0, 0, 1, 1);
+    if (color >>> 8 === 0xffffff) ctx.drawImage(image, sx, sy, sw, sh, 0, 0, 1, 1);
+    else ctx.drawImage(this.tinted(image, sx, sy, sw, sh, color), 0, 0, sw, sh, 0, 0, 1, 1);
     if (flash > 0) {
       ctx.globalAlpha *= Math.min(1, flash);
-      ctx.drawImage(this.whiteSilhouette(src, sx, sy, sw, sh), 0, 0, sw, sh, 0, 0, 1, 1);
+      ctx.drawImage(this.whiteSilhouette(image, sx, sy, sw, sh), 0, 0, sw, sh, 0, 0, 1, 1);
     }
   }
 
@@ -132,8 +146,49 @@ export class Canvas2DBackend implements Backend {
 
   dispose(): void {}
 
+  setTarget(target: RenderTarget | null, clear: number | null, _width: number, _height: number): void {
+    this.ctx = target ? (this.surface(target).getContext("2d") as CanvasRenderingContext2D) : this.screen;
+    this.target = target;
+    // Targets are sized in pixels; the canvas in logical units at its backing scale.
+    this.scale = target ? 1 : this.screenScale;
+    this.smoothing = undefined;
+    this.setBlend(this.blendMode);
+    if (target && clear !== null) {
+      const ctx = this.ctx;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, target.width, target.height);
+      if ((clear & 0xff) !== 0) {
+        ctx.fillStyle = rgbaToCss(clear);
+        ctx.fillRect(0, 0, target.width, target.height);
+      }
+    }
+  }
+
+  disposeTarget(target: RenderTarget): void {
+    if (target === this.target) throw new Error("spryte: can't dispose a render target while drawing into it");
+    const surface = this.surfaces.get(target);
+    if (!surface) return;
+    // Release the pixels now rather than whenever the canvas is collected.
+    surface.width = 0;
+    surface.height = 0;
+    this.surfaces.delete(target);
+  }
+
+  private surface(target: RenderTarget): Surface {
+    let surface = this.surfaces.get(target);
+    if (!surface) {
+      surface =
+        typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(target.width, target.height) : document.createElement("canvas");
+      surface.width = target.width;
+      surface.height = target.height;
+      this.surfaces.set(target, surface);
+    }
+    return surface;
+  }
+
   /** The source region multiplied by `color`'s RGB, keeping the source's alpha. */
-  private tinted(src: TextureSource, x: number, y: number, w: number, h: number, color: number): HTMLCanvasElement | OffscreenCanvas {
+  private tinted(src: CanvasImageSource, x: number, y: number, w: number, h: number, color: number): HTMLCanvasElement | OffscreenCanvas {
     const scratch = this.scratchCanvas(w, h);
     const sctx = scratch.getContext("2d") as CanvasRenderingContext2D | null;
     if (!sctx) return scratch;
@@ -157,7 +212,7 @@ export class Canvas2DBackend implements Backend {
     return this.scratch;
   }
 
-  private whiteSilhouette(src: TextureSource, x: number, y: number, w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
+  private whiteSilhouette(src: CanvasImageSource, x: number, y: number, w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
     const scratch = this.scratchCanvas(w, h);
     const sctx = scratch.getContext("2d") as CanvasRenderingContext2D | null;
     if (!sctx) return scratch;

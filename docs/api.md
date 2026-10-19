@@ -50,9 +50,28 @@ draw.dispose();                           // frees GPU objects and listeners; th
 | `font` | Default font: a CSS string, a `BitmapFont`, or a function returning one (evaluated lazily). |
 | `invalidate(image)` | Re-upload an image whose pixels changed. |
 
+## Render targets
+
+Offscreen images you draw into, then draw like any image: post-processing, glow, cached static layers, minimaps, trails.
+
+```ts
+const glow = draw.createTarget(160, 90);              // pixels
+draw.into(glow, () => {                               // inside: target pixels, fresh transform and clips
+  draw.sprites(spark, sparks, n, { tint: "#ffd36b" });
+});                                                   // clear: transparent by default; null keeps contents
+draw.blend("add");
+draw.sprite(glow, 0, 0, { origin: [0, 0], scaleX: 2, scaleY: 2, smooth: true });
+draw.disposeTarget(glow);                             // when you're done with it
+```
+
+- `into()` nests, and restores the outer transform, clips, alpha and destination afterwards, even if `fn` throws.
+- Drawing a target into itself, or disposing it while you're drawing into it, throws.
+- Targets work on both backends. A real-GPU check confirms that drawing into a target and then drawing the target 1:1 gives the same pixels as drawing directly (`npm run test:browser`).
+- After a WebGL context loss, target contents are blank (GPU memory is gone). Check `draw.contextLost`, or redraw targets each frame.
+
 ## Diagnostics and escape hatches
 
-`kind` (`"webgl2"` or `"2d"`), `quads` (submitted this frame), `drawCalls` (GPU draw calls this frame on WebGL2; one per quad on Canvas 2D), and `raw` (`{ kind: "webgl2", gl }` or `{ kind: "2d", ctx }`). If you mix raw calls with `draw` calls, restore the state you change.
+`kind` (`"webgl2"` or `"2d"`), `contextLost`, `quads` (submitted this frame), `drawCalls` (GPU draw calls this frame on WebGL2; one per quad on Canvas 2D), and `raw` (`{ kind: "webgl2", gl }` or `{ kind: "2d", ctx }`). If you mix raw calls with `draw` calls, restore the state you change.
 
 ## Resource ownership
 

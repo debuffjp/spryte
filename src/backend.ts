@@ -13,8 +13,10 @@ export interface ClipRect {
 /** Raw access for advanced users. The backends are not interchangeable at this level. */
 export type RawContext = { kind: "webgl2"; gl: WebGL2RenderingContext } | { kind: "2d"; ctx: CanvasRenderingContext2D };
 
+import type { RenderTarget } from "./target.js";
+
 /** Image sources the renderer can draw. Textures are cached per source object. */
-export type TextureSource = HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | ImageBitmap;
+export type TextureSource = HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | ImageBitmap | RenderTarget;
 
 /**
  * What a rendering backend implements. Everything is expressed as quads: a transform that maps the
@@ -24,6 +26,8 @@ export type TextureSource = HTMLImageElement | HTMLCanvasElement | OffscreenCanv
 export interface Backend {
   readonly kind: "webgl2" | "2d";
   readonly raw: RawContext;
+  /** True while the GPU context is lost, where that can happen (WebGL2). */
+  readonly contextLost?: boolean;
   /** GPU draw calls submitted so far this frame, where the backend batches (WebGL2). */
   readonly drawCalls?: number;
   /** Begin a frame: clear to `clear` (0xRRGGBBAA) at the given logical size and backing scale. */
@@ -64,6 +68,13 @@ export interface Backend {
     snap: boolean,
   ): void;
   setBlend(mode: BlendMode): void;
+  /**
+   * Send drawing to `target` (null: the canvas). `clear` (0xRRGGBBAA) clears it first; null keeps what's there.
+   * `width, height` are the logical size of the destination (the target's pixel size, or the canvas's logical size).
+   */
+  setTarget(target: RenderTarget | null, clear: number | null, width: number, height: number): void;
+  /** Free a target's GPU or canvas storage. */
+  disposeTarget(target: RenderTarget): void;
   /** Restrict drawing to a rectangle in backing-store pixels (top-left origin), or remove the clip. */
   setClip(rect: ClipRect | null): void;
   /** Submit everything queued this frame. */

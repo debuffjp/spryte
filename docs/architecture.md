@@ -19,6 +19,7 @@ Every draw becomes `quad(matrix, source, srcRect, rgba, flash, smooth)`: a 2×3 
 - **Multi-texture batches.** Up to 8 (texture, filter) pairs per draw call. Sampler objects carry the filtering, so one upload serves both smooth and pixelated draws.
 - **What breaks a batch:** a 9th distinct texture/filter pair, a full buffer, a blend change, a clip change, `invalidate()`, and `end()`.
 - **Copy pipeline** (`draw.sprites`): a second program in which each instance is just a `vec2` position (8 bytes, versus 52). The shared transform, UVs, tint and flash are uniforms, and pixel snapping happens in the vertex shader with the same rule as `sprite()`. A `Float32Array` is uploaded directly, so the CPU does nothing per copy.
+- **Render targets:** a framebuffer plus texture per target, created on first use. Sampling flips V, because GL stores the target bottom row first. Contents are already premultiplied, so they blend like uploaded images.
 - **Premultiplied alpha** throughout: uploads premultiply, the blend is `ONE, ONE_MINUS_SRC_ALPHA` (`add`: `ONE, ONE`), and tint is premultiplied in the vertex shader.
 - **Context loss:** `preventDefault` on loss, skip work while lost, and rebuild everything on restore.
 
@@ -32,4 +33,4 @@ spryte doesn't own the loop, input, audio, asset loading, cameras with game beha
 
 ## Not yet
 
-Render targets, custom shaders, masks beyond axis-aligned clips, more blend modes, meshes, mipmaps, GPU timers, and WebGPU. Each will be added when a real game needs it and a benchmark shows it doesn't cost the common path.
+Custom shaders, masks beyond axis-aligned clips, more blend modes, meshes, mipmaps, GPU timers, and WebGPU. Each will be added when a real game needs it and a benchmark shows it doesn't cost the common path.

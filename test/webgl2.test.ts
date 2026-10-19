@@ -171,4 +171,89 @@ describe("WebGL2Backend", () => {
     expect(draw.drawCalls).toBe(1);
     draw.end();
   });
+
+  describe("render targets", () => {
+    it("draws into a framebuffer at the target's size and switches back to the canvas", () => {
+      const { gl, calls } = fakeGL();
+      const draw = new Draw(new WebGL2Backend(gl), false);
+      draw.begin("#000", 50, 25, 2);
+      const t = draw.createTarget(32, 16);
+      calls.length = 0;
+      draw.into(t, () => draw.rect(0, 0, 4, 4, "#fff"));
+      const binds = calls.filter((c) => c.name === "bindFramebuffer").map((c) => c.args[1] !== null);
+      expect(binds.at(0)).toBe(true);
+      expect(binds.at(-1)).toBe(false);
+      const viewports = calls.filter((c) => c.name === "viewport").map((c) => c.args);
+      expect(viewports).toEqual([
+        [0, 0, 32, 16],
+        [0, 0, 100, 50],
+      ]);
+      const views = calls.filter((c) => c.name === "uniform2f").map((c) => c.args.slice(1));
+      expect(views).toEqual([
+        [32, 16],
+        [50, 25],
+      ]);
+      draw.end();
+    });
+
+    it("samples targets upside down, since WebGL stores them bottom row first", () => {
+      const { gl, calls } = fakeGL();
+      const draw = new Draw(new WebGL2Backend(gl), false);
+      draw.begin("#000", 100, 50, 1);
+      const t = draw.createTarget(10, 10);
+      draw.into(t, () => {});
+      draw.sprite(t, 5, 5);
+      draw.end();
+      const upload = calls.findLast((c) => c.name === "bufferSubData") as { args: unknown[] };
+      const f = upload.args[2] as Float32Array;
+      expect([f[6], f[7], f[8], f[9]]).toEqual([0, 1, 1, 0]);
+    });
+
+    it("refuses to draw a target into itself, or dispose it while drawing into it", () => {
+      const { gl } = fakeGL();
+      const draw = new Draw(new WebGL2Backend(gl), false);
+      draw.begin("#000", 100, 50, 1);
+      const t = draw.createTarget(10, 10);
+      expect(() => draw.into(t, () => draw.sprite(t, 0, 0))).toThrow(/into itself/);
+      expect(() => draw.into(t, () => draw.sprites(t, [0, 0]))).toThrow(/into itself/);
+      expect(() => draw.into(t, () => draw.disposeTarget(t))).toThrow(/while drawing into it/);
+      // After a throw inside into(), drawing is back on the canvas.
+      expect(() => draw.sprite(t, 0, 0)).not.toThrow();
+      draw.end();
+    });
+
+    it("clips inside a target flip against the target's height", () => {
+      const { gl, calls } = fakeGL();
+      const draw = new Draw(new WebGL2Backend(gl), false);
+      draw.begin("#000", 100, 50, 1);
+      draw.into(draw.createTarget(40, 20), () => draw.clip(0, 0, 10, 5, () => draw.rect(0, 0, 1, 1, "#fff")));
+      expect(calls.find((c) => c.name === "scissor")?.args).toEqual([0, 15, 10, 5]);
+      draw.end();
+    });
+
+    it("frees framebuffers on disposeTarget and dispose, and recreates targets blank after context loss", () => {
+      const { gl, created, fire, count } = fakeGL();
+      const backend = new WebGL2Backend(gl);
+      const draw = new Draw(backend, false);
+      draw.begin("#000", 100, 50, 1);
+      const a = draw.createTarget(8, 8);
+      const b = draw.createTarget(8, 8);
+      draw.into(a, () => {});
+      draw.into(b, () => {});
+      draw.disposeTarget(a);
+      const fbos = () => created.filter((o) => o.kind === "Framebuffer");
+      expect(fbos().map((o) => o.deleted)).toEqual([true, false]);
+      fire("webglcontextlost");
+      const restoredFrom = created.length;
+      fire("webglcontextrestored");
+      const before = count("createFramebuffer");
+      draw.begin("#000", 100, 50, 1);
+      draw.into(b, () => {});
+      expect(count("createFramebuffer")).toBe(before + 1);
+      draw.end();
+      draw.dispose();
+      // Objects from before the loss died with that context; everything made since is freed.
+      expect(created.slice(restoredFrom).filter((o) => !o.deleted)).toEqual([]);
+    });
+  });
 });
