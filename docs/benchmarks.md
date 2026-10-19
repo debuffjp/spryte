@@ -41,6 +41,17 @@ Windows 11, Chrome (Playwright), ANGLE D3D11, NVIDIA RTX 5060 Laptop GPU. All ro
 | debuff `Game` on spryte | 50,000 | 2.4 ms | 9.5 ms |
 | PixiJS 8 `Sprite` | 20,000 | 7.5 ms | 33.4 ms |
 
+## Download size
+
+Each app draws one rotated sprite: spryte with `createRenderer` + `draw.sprite`, and PixiJS 8.22 with `Application` + `Assets.load` + `Sprite`. Both are Vite 8 production builds, measured as brotli of the JS.
+
+| | JS at startup | All JS (including lazy chunks) |
+| --- | --- | --- |
+| **spryte** | **7.2 kB** | 8.1 kB (the Canvas 2D fallback is the lazy part) |
+| PixiJS 8 | 87.8 kB | 151.9 kB |
+
+That's about 12× less JS to download before the first frame, which matters most on phones and slow connections.
+
 ## Reading these honestly
 
 - **Like for like on the bulk path:** `draw.sprites()` vs `ParticleContainer`, both moving one texture by position only, is about **3× faster at 200k** (3.8 vs 11.3 ms) and holds 60 fps at **4× the count** or more. The reason is bandwidth: spryte uploads 8 bytes per copy, straight from your `Float32Array`. It's checked pixel-identical to a `sprite()` loop on a real GPU.
