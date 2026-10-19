@@ -1,6 +1,6 @@
 # spryte
 
-**A 2D renderer for the web that draws moving sprites 2–4× faster than the most widely used one**, in an [open, pixel-checked benchmark](https://github.com/debuffjp/2dbench), from about a ninth of the JavaScript (10.1 kB brotli).
+**Blazing fast 2D rendering for the web.** spryte draws moving sprites **2–4× faster than the most widely used renderer**, in an [open, pixel-checked benchmark](https://github.com/debuffjp/2dbench), from about a ninth of the JavaScript (10.1 kB brotli).
 
 You draw in immediate mode (sprites, bulk sprites, rects, circles, lines, text, clips, blend modes, render targets and custom shaders), and spryte batches it onto WebGL2 with instancing, falling back to Canvas 2D automatically. No dependencies, no scene graph, no game framework.
 

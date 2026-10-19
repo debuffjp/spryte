@@ -1,7 +1,7 @@
 {
   "name": "spryte",
   "version": "0.1.0",
-  "description": "Verifiably fast 2D WebGL2 renderer: moving sprites 2–4× faster than the most widely used web renderer, in an open, pixel-checked benchmark. ~10 kB, Canvas 2D fallback.",
+  "description": "Blazing fast 2D renderer for the web: draws moving sprites 2–4× faster than the most widely used one, verified in an open benchmark. About 10 kB.",
   "keywords": [
     "2d",
     "renderer",
