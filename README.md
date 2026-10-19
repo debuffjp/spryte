@@ -40,6 +40,12 @@ Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved 
 | 50k sprites with rotation, scale and tint, one call each | **9.8 ms** | 32.3 ms (`Sprite`) | 3.3× faster |
 | 200k sprites, position only, bulk | **4.4 ms** | 8.9 ms (`ParticleContainer`) | 2.0× faster |
 
+![Most sprites each library holds at 60 fps, per 2dbench scene](docs/charts/max-at-60fps.svg)
+
+![Frame time by sprite count for dynamic particles: spryte and PixiJS, with the 60 fps budget](docs/charts/particles.svg)
+
+*Charts from [2dbench](https://github.com/debuffjp/2dbench) (7 rounds; the table above is spryte's own bench, 3 rounds). Lower lines are faster; the dashed line is the 60 fps budget.*
+
 In [2dbench](https://github.com/debuffjp/2dbench)'s raycaster scene (a retro first-person maze drawn as thousands of texture slices), spryte held 10,000 enemies at 60 fps against PixiJS `Sprite`'s 2,000. The gap is per-sprite work: a PixiJS `Sprite` is a scene-graph object updated, bounded and batched every frame, while spryte writes a few numbers per sprite into a typed array and the GPU expands them. Static scenes, where PixiJS can cache, are much closer.
 
 - **Bulk sprites with no per-sprite JavaScript.** On WebGL2, pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
