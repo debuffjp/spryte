@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Matrix, TextureSource } from "../src/backend.js";
+import { Draw } from "../src/draw.js";
 import { WebGL2Backend } from "../src/webgl2.js";
 
 /**
@@ -135,5 +136,39 @@ describe("WebGL2Backend", () => {
     const be = new WebGL2Backend(gl);
     be.setClip({ x: 10, y: 5, w: 20, h: 10 });
     expect(calls.find((c) => c.name === "scissor")?.args).toEqual([10, 35, 20, 10]);
+  });
+
+  it("sprites() draws after queued quads in one call, uploading a Float32Array as is", () => {
+    const { gl, calls } = fakeGL();
+    const draw = new Draw(new WebGL2Backend(gl), false);
+    const img = image(8, 8);
+    const pos = new Float32Array([1, 2, 3, 4, 5, 6]);
+    calls.length = 0;
+    draw.begin("#000", 100, 50, 1);
+    draw.rect(0, 0, 1, 1, "#fff");
+    draw.sprites(img, pos, 3, { tint: "#ff0000" });
+    draw.rect(0, 0, 1, 1, "#fff");
+    draw.end();
+    const names = calls.map((c) => c.name).filter((n) => n === "drawArraysInstanced" || n === "useProgram");
+    // queued rect, switch to the copy program, copies, back to the sprite program, last rect
+    expect(names).toEqual(["drawArraysInstanced", "useProgram", "drawArraysInstanced", "useProgram", "drawArraysInstanced"]);
+    const copies = calls.filter((c) => c.name === "drawArraysInstanced")[1];
+    expect(copies?.args[3]).toBe(3);
+    const upload = calls.find((c) => c.name === "bufferData" && c.args[1] === pos);
+    expect(upload?.args.slice(3)).toEqual([0, 6]);
+    const color = calls.find((c) => c.name === "uniform4f" && c.args[1] === 1 && c.args[2] === 0);
+    expect(color).toBeDefined();
+    expect(draw.drawCalls).toBe(3);
+  });
+
+  it("sprites() copies plain arrays through a staging buffer", () => {
+    const { gl, calls } = fakeGL();
+    const draw = new Draw(new WebGL2Backend(gl), false);
+    draw.begin("#000", 100, 50, 1);
+    draw.sprites(image(), [1, 2, 3, 4]);
+    const upload = calls.findLast((c) => c.name === "bufferData") as { args: unknown[] };
+    expect(Array.from((upload.args[1] as Float32Array).subarray(0, 4))).toEqual([1, 2, 3, 4]);
+    expect(draw.drawCalls).toBe(1);
+    draw.end();
   });
 });

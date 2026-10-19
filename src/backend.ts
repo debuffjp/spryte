@@ -44,6 +44,25 @@ export interface Backend {
     flash: number,
     smooth: boolean,
   ): void;
+  /**
+   * Many copies of one quad: `t` maps the unit square for a copy at (0, 0); copy i is moved by
+   * (positions[2i], positions[2i+1]) through `m`'s linear part. `snap` rounds each copy to whole pixels.
+   */
+  quads(
+    t: Matrix,
+    m: Matrix,
+    positions: ArrayLike<number>,
+    count: number,
+    src: TextureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    color: number,
+    flash: number,
+    smooth: boolean,
+    snap: boolean,
+  ): void;
   setBlend(mode: BlendMode): void;
   /** Restrict drawing to a rectangle in backing-store pixels (top-left origin), or remove the clip. */
   setClip(rect: ClipRect | null): void;

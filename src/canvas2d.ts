@@ -64,6 +64,35 @@ export class Canvas2DBackend implements Backend {
     }
   }
 
+  quads(
+    t: Matrix,
+    m: Matrix,
+    positions: ArrayLike<number>,
+    count: number,
+    src: TextureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    color: number,
+    flash: number,
+    smooth: boolean,
+    snap: boolean,
+  ): void {
+    const q: Matrix = [t[0], t[1], t[2], t[3], 0, 0];
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 2] as number;
+      const y = positions[i * 2 + 1] as number;
+      q[4] = t[4] + m[0] * x + m[2] * y;
+      q[5] = t[5] + m[1] * x + m[3] * y;
+      if (snap) {
+        q[4] = Math.round(q[4]);
+        q[5] = Math.round(q[5]);
+      }
+      this.quad(q, src, sx, sy, sw, sh, color, flash, smooth);
+    }
+  }
+
   setBlend(mode: BlendMode): void {
     this.blendMode = mode;
     this.ctx.globalCompositeOperation = mode === "add" ? "lighter" : "source-over";

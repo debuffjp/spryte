@@ -236,13 +236,56 @@ export class Draw {
 
   /** Draw an image frame (or a whole image) at `x, y`, anchored by `origin`. Allocation-free hot path. */
   sprite(frame: Frame | TextureSource, x: number, y: number, o: SpriteDrawOptions = NO_OPTIONS): void {
-    const f = "image" in frame ? frame : this.wholeImage(frame);
+    const f = this.place(frame, x, y, o);
+    const t = this.tmp;
+    const smooth = o.smooth ?? this.smooth;
+    if (!smooth && t[1] === 0 && t[2] === 0) {
+      // Pixel art: put unrotated sprites on whole pixels. Nearest sampling at fractional positions
+      // makes edges gain and lose a pixel from frame to frame, which reads as flicker.
+      t[4] = Math.round(t[4]);
+      t[5] = Math.round(t[5]);
+    }
+    this.quads++;
+    this.backend.quad(t, f.image, f.x, f.y, f.w, f.h, this.spriteColor(o), o.flash ?? 0, smooth);
+  }
+
+  /**
+   * Draw one image frame at many positions in a single call: particles, bullets, swarms, starfields.
+   * `positions` holds x, y pairs (a `Float32Array` you reuse is ideal); `count` defaults to all of them.
+   * Every copy shares `options` (rotation, scale, tint, alpha…), so per-copy work is just the position.
+   * Much faster than calling `sprite()` in a loop, and allocation-free.
+   *
+   * ```ts
+   * const pos = new Float32Array(2 * MAX);
+   * // ...update pos...
+   * draw.sprites(spark, pos, live, { tint: "#ffd36b", alpha: 0.8 });
+   * ```
+   */
+  sprites(
+    frame: Frame | TextureSource,
+    positions: ArrayLike<number>,
+    count = positions.length >> 1,
+    o: SpriteDrawOptions = NO_OPTIONS,
+  ): void {
+    if (count <= 0) return;
+    const f = this.place(frame, 0, 0, o);
+    const t = this.tmp;
+    const smooth = o.smooth ?? this.smooth;
+    // Snapped per copy, like sprite().
+    const snap = !smooth && t[1] === 0 && t[2] === 0;
+    this.quads += count;
+    this.backend.quads(t, this.m, positions, count, f.image, f.x, f.y, f.w, f.h, this.spriteColor(o), o.flash ?? 0, smooth, snap);
+  }
+
+  /** tmp = M · T(x, y) · R(rotation) · S(sx, sy) · T(ox, oy) · S(w, h), expanded by hand. Returns the frame. */
+  private place(frame: Frame | TextureSource, x: number, y: number, o: SpriteDrawOptions): Frame {
+    // Check the repeat-image cache before `in`: on a DOM image, `in` walks a long prototype chain per call.
+    const f = frame === this.lastImage && this.lastFrame ? this.lastFrame : "image" in frame ? frame : this.wholeImage(frame);
     const origin = o.origin;
     const ox = -(origin ? origin[0] : 0.5) * f.w;
     const oy = -(origin ? origin[1] : 0.5) * f.h;
     const sx = (o.scaleX ?? 1) * (o.flipX ? -1 : 1);
     const sy = (o.scaleY ?? 1) * (o.flipY ? -1 : 1);
-    // tmp = M · T(x, y) · R(rotation) · S(sx, sy) · T(ox, oy) · S(w, h), expanded by hand.
     const m = this.m;
     let a = sx;
     let b = 0;
@@ -266,18 +309,13 @@ export class Draw {
     t[3] = (m[1] * c + m[3] * d) * f.h;
     t[4] = m[0] * lx + m[2] * ly + m[4];
     t[5] = m[1] * lx + m[3] * ly + m[5];
-    const smooth = o.smooth ?? this.smooth;
-    if (!smooth && t[1] === 0 && t[2] === 0) {
-      // Pixel art: put unrotated sprites on whole pixels. Nearest sampling at fractional positions
-      // makes edges gain and lose a pixel from frame to frame, which reads as flicker.
-      t[4] = Math.round(t[4]);
-      t[5] = Math.round(t[5]);
-    }
+    return f;
+  }
+
+  private spriteColor(o: SpriteDrawOptions): number {
     const tint = o.tint === undefined ? WHITE : toRGBA(o.tint);
     const alpha = o.alpha ?? 1;
-    const color = alpha === 1 && this.alpha === 1 ? tint : this.withAlpha(tint, alpha);
-    this.quads++;
-    this.backend.quad(t, f.image, f.x, f.y, f.w, f.h, color, o.flash ?? 0, smooth);
+    return alpha === 1 && this.alpha === 1 ? tint : this.withAlpha(tint, alpha);
   }
 
   /** Text, rasterised once and cached as a texture (crisp at the current render scale). */

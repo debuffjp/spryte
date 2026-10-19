@@ -5,6 +5,7 @@ spryte is developed inside the [debuff monorepo](https://github.com/debuffjp/deb
 ```bash
 npm install
 npm test          # unit tests (happy-dom, fake WebGL2)
+npm run test:browser  # pixel checks on a real GPU (headless Chrome)
 npm run build     # dist/ with types
 npm run example   # the minimal example in a browser
 ```

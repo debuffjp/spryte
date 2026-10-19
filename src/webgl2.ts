@@ -25,6 +25,53 @@ void main() {
   v_unit = int(a_extra.y);
 }`;
 
+/** Copies of one quad that differ only in position (`draw.sprites`): 8 bytes per copy instead of 52. */
+const COPY_VERT = `#version 300 es
+layout(location=0) in vec2 a_corner;
+layout(location=1) in vec2 a_pos;
+uniform vec2 u_view;
+uniform vec4 u_quad;    // a, b, c, d: the unit square onto the sprite
+uniform vec2 u_origin;  // e, f for a copy at (0, 0)
+uniform vec4 u_linear;  // the current transform's linear part, moving each copy
+uniform vec4 u_uv;
+uniform float u_snap;
+out highp vec2 v_uv;
+void main() {
+  vec2 e = u_origin + mat2(u_linear.xy, u_linear.zw) * a_pos;
+  // Same rule as draw.sprite() for unrotated pixel art: whole pixels (Math.round == floor(x + 0.5)).
+  if (u_snap > 0.5) e = floor(e + 0.5);
+  vec2 p = mat2(u_quad.xy, u_quad.zw) * a_corner + e;
+  vec2 clip = p / u_view * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  v_uv = mix(u_uv.xy, u_uv.zw, a_corner);
+}`;
+
+const COPY_FRAG = `#version 300 es
+precision mediump float;
+in highp vec2 v_uv;
+uniform sampler2D u_tex;
+uniform vec4 u_color;
+uniform float u_flash;
+out vec4 outColor;
+void main() {
+  vec4 t = texture(u_tex, v_uv) * vec4(u_color.rgb * u_color.a, u_color.a);
+  outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
+}`;
+
+interface CopyPipeline {
+  program: WebGLProgram;
+  vao: WebGLVertexArrayObject;
+  buffer: WebGLBuffer;
+  view: WebGLUniformLocation | null;
+  quad: WebGLUniformLocation | null;
+  origin: WebGLUniformLocation | null;
+  linear: WebGLUniformLocation | null;
+  uv: WebGLUniformLocation | null;
+  color: WebGLUniformLocation | null;
+  flash: WebGLUniformLocation | null;
+  snap: WebGLUniformLocation | null;
+}
+
 const FRAG = `#version 300 es
 precision mediump float;
 // highp: mediump is fp16 on many mobile GPUs, too coarse to address texels in atlases past ~1024 px.
@@ -75,6 +122,10 @@ export class WebGL2Backend implements Backend {
   private program!: WebGLProgram;
   private vao!: WebGLVertexArrayObject;
   private quadBuffer!: WebGLBuffer;
+  private copies!: CopyPipeline;
+  private staging = new Float32Array(0);
+  private viewW = 1;
+  private viewH = 1;
   /** True between webglcontextlost and webglcontextrestored: drawing is skipped. */
   private lost = false;
   private readonly onLost = (e: Event) => {
@@ -169,6 +220,9 @@ export class WebGL2Backend implements Backend {
     this.wrap();
     this.nearest = sampler(gl, gl.NEAREST);
     this.linear = sampler(gl, gl.LINEAR);
+    this.copies = this.copyPipeline(quad);
+    gl.useProgram(program);
+    gl.bindVertexArray(this.vao);
   }
 
   begin(clear: number, width: number, height: number): void {
@@ -176,6 +230,8 @@ export class WebGL2Backend implements Backend {
     const gl = this.gl;
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform2f(this.viewLoc, width, height);
+    this.viewW = width;
+    this.viewH = height;
     gl.clearColor((clear >>> 24) / 255, ((clear >>> 16) & 0xff) / 255, ((clear >>> 8) & 0xff) / 255, (clear & 0xff) / 255);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.submitted = 0;
@@ -241,6 +297,58 @@ export class WebGL2Backend implements Backend {
     this.count++;
   }
 
+  quads(
+    t: Matrix,
+    m: Matrix,
+    positions: ArrayLike<number>,
+    count: number,
+    src: TextureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    color: number,
+    flash: number,
+    smooth: boolean,
+    snap: boolean,
+  ): void {
+    if (this.lost || count <= 0) return;
+    // Draw order: everything queued so far goes first.
+    this.flush();
+    const gl = this.gl;
+    const tex = src === this.lastSrc && this.last ? this.last : this.texture(src);
+    this.lastSrc = src;
+    this.last = tex;
+    const c = this.copies;
+    gl.useProgram(c.program);
+    gl.bindVertexArray(c.vao);
+    gl.uniform2f(c.view, this.viewW, this.viewH);
+    gl.uniform4f(c.quad, t[0], t[1], t[2], t[3]);
+    gl.uniform2f(c.origin, t[4], t[5]);
+    gl.uniform4f(c.linear, m[0], m[1], m[2], m[3]);
+    gl.uniform4f(c.uv, sx * tex.iw, sy * tex.ih, (sx + sw) * tex.iw, (sy + sh) * tex.ih);
+    gl.uniform4f(c.color, (color >>> 24) / 255, ((color >>> 16) & 0xff) / 255, ((color >>> 8) & 0xff) / 255, (color & 0xff) / 255);
+    gl.uniform1f(c.flash, flash);
+    gl.uniform1f(c.snap, snap ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+    gl.bindSampler(0, smooth ? this.linear : this.nearest);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.buffer);
+    // A Float32Array goes to the GPU as is: no per-copy work on the CPU at all.
+    let data: Float32Array;
+    if (positions instanceof Float32Array) data = positions;
+    else {
+      if (this.staging.length < count * 2) this.staging = new Float32Array(count * 2);
+      data = this.staging;
+      for (let i = 0; i < count * 2; i++) data[i] = positions[i] as number;
+    }
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW, 0, count * 2);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+    this.submitted++;
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+  }
+
   setBlend(mode: BlendMode): void {
     if (mode === this.blend || this.lost) return;
     this.flush();
@@ -293,10 +401,45 @@ export class WebGL2Backend implements Backend {
       gl.deleteBuffer(this.quadBuffer);
       gl.deleteVertexArray(this.vao);
       gl.deleteProgram(this.program);
+      gl.deleteProgram(this.copies.program);
+      gl.deleteVertexArray(this.copies.vao);
+      gl.deleteBuffer(this.copies.buffer);
     }
     this.textures.clear();
     this.lastSrc = null;
     this.last = undefined;
+  }
+
+  private copyPipeline(quad: WebGLBuffer): CopyPipeline {
+    const gl = this.gl;
+    const program = link(gl, COPY_VERT, COPY_FRAG);
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, "u_tex"), 0);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    const buffer = gl.createBuffer();
+    if (!buffer) throw new Error("WebGL2: could not create buffer");
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(1, 1);
+    const at = (name: string) => gl.getUniformLocation(program, name);
+    return {
+      program,
+      vao,
+      buffer,
+      view: at("u_view"),
+      quad: at("u_quad"),
+      origin: at("u_origin"),
+      linear: at("u_linear"),
+      uv: at("u_uv"),
+      color: at("u_color"),
+      flash: at("u_flash"),
+      snap: at("u_snap"),
+    };
   }
 
   private flush(): void {

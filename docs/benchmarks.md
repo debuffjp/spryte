@@ -21,16 +21,17 @@ npm run bench:renderer -- spryte pixi-sprite    # a subset
 
 Windows 11, Chrome (Playwright), ANGLE D3D11, NVIDIA RTX 5060 Laptop GPU. All rows in a table come from one session.
 
-**bunny**
+**bunny** (frame = CPU + GPU, median)
 
-| Renderer | Max @60fps | 10k | 50k |
-| --- | --- | --- | --- |
-| spryte (`createRenderer`) | 100,000 | 1.8 ms | 5.5 ms |
-| debuff `Game` on spryte | 100,000 | 1.8 ms | 5.7 ms |
-| PixiJS 8 `Sprite` | 20,000 | 4.0 ms | 15.4 ms |
-| PixiJS 8 `ParticleContainer` | 200,000 | 1.0 ms | 3.9 ms |
-| Canvas 2D `drawImage` | 5,000 | 22.3 ms | 138.8 ms |
-| spryte Canvas 2D fallback (via debuff) | 5,000 | 33.5 ms | 227.2 ms |
+| Renderer | Max @60fps | 10k | 50k | 200k |
+| --- | --- | --- | --- | --- |
+| **spryte `draw.sprites()`** (bulk, Float32Array) | **≥ 800,000** (top of the ladder) | 0.7 ms | 1.3 ms | **3.8 ms** |
+| PixiJS 8 `ParticleContainer` | 200,000 | 1.4 ms | 4.1 ms | 11.3 ms |
+| spryte `draw.sprite()` loop | 100,000 | 1.6 ms | 5.4 ms | 20.6 ms |
+| debuff `Game` on spryte (`sprite()` loop) | 100,000 | 2.1 ms | 6.3 ms | 20.5 ms |
+| PixiJS 8 `Sprite` | 20,000 | 5.3 ms | 21.2 ms | n/a |
+| Canvas 2D `drawImage` | 5,000 | 29.9 ms | 148.0 ms | n/a |
+| spryte Canvas 2D fallback (via debuff) | 5,000 | 29.7 ms | 224.6 ms | n/a |
 
 **mixed**
 
@@ -42,8 +43,9 @@ Windows 11, Chrome (Playwright), ANGLE D3D11, NVIDIA RTX 5060 Laptop GPU. All ro
 
 ## Reading these honestly
 
-- In the same session, spryte is about **2.8× faster than PixiJS `Sprite`** on bunnymark at 50k, and about **4.6× faster** on the mixed scene.
-- **PixiJS `ParticleContainer` beats spryte on bunnymark** (3.9 vs 5.5 ms at 50k). It's a specialised path (fixed texture, chosen dynamic properties), but it's the number to beat for particle-style workloads.
+- **Like for like on the bulk path:** `draw.sprites()` vs `ParticleContainer`, both moving one texture by position only, is about **3× faster at 200k** (3.8 vs 11.3 ms) and holds 60 fps at **4× the count** or more. The reason is bandwidth: spryte uploads 8 bytes per copy, straight from your `Float32Array`. It's checked pixel-identical to a `sprite()` loop on a real GPU.
+- **Like for like on the general path:** a `draw.sprite()` loop vs PixiJS `Sprite` is about **4× faster** at 50k (5.4 vs 21.2 ms). On the mixed scene (rotation, scale, tint, alpha, 4 textures) it's about **4.6× faster**.
+- The bulk path's 200k CPU time (2.3 ms) is mostly the benchmark's own simulation and copy loop, which every renderer pays.
 - Run-to-run noise on this laptop is about ±15%, and absolute numbers vary between days: every renderer measured slower here than on 2026-10-16. Compare rows within a table, not across dates.
 - The debuff rows include `Game`'s own requestAnimationFrame loop, which keeps running during measurement and can add frames. Treat them as an upper bound on the framework's overhead.
 - This is one machine and one browser. There are **no mobile, integrated-GPU, Firefox or Safari results yet.**
