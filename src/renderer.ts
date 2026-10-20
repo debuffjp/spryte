@@ -26,20 +26,20 @@ export interface RendererOptions {
 export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptions = {}): Draw {
   const choice = options.backend ?? "auto";
   if (choice !== "2d") {
-    // alpha:false lets the compositor skip blending; desynchronized lowers input latency where supported.
+    // alpha:false lets the compositor skip blending. No desynchronized: the low-latency path flickers on
+    // Windows laptops with two GPUs (seen in shipped games), and the latency it saves is a frame at most.
     // preserveDrawingBuffer:false is fastest; captures render and read in the same task.
     const gl = canvas.getContext("webgl2", {
       alpha: options.transparent ?? false,
       antialias: false,
       premultipliedAlpha: true,
-      desynchronized: true,
       powerPreference: "high-performance",
     });
     if (gl) return new Draw(new WebGL2Backend(gl), options.smooth ?? true);
     if (choice === "webgl2")
       throw new Error('spryte: WebGL2 is unavailable in this browser (use backend: "auto" to fall back to Canvas 2D)');
   }
-  const ctx = canvas.getContext("2d", { alpha: options.transparent ?? false, desynchronized: true });
+  const ctx = canvas.getContext("2d", { alpha: options.transparent ?? false });
   if (!ctx) throw new Error("spryte: no WebGL2 or Canvas 2D context available (is the canvas already using another context type?)");
   const draw = new Draw(pending(ctx), options.smooth ?? true);
   draw.ready = import("./canvas2d.js").then(
