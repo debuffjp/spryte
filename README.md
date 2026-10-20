@@ -76,6 +76,7 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 ## Docs
 
 - **Guides on debuff.jp:** [getting started](https://debuff.jp/spryte/getting-started), [sprites and frames](https://debuff.jp/spryte/sprites), [bulk sprites and particles](https://debuff.jp/spryte/bulk-sprites), [shapes and text](https://debuff.jp/spryte/shapes-and-text), [transforms and clipping](https://debuff.jp/spryte/transforms-and-clipping), [render targets and shaders](https://debuff.jp/spryte/render-targets-and-shaders), [pixel art](https://debuff.jp/spryte/pixel-art)
+- **[How spryte got fast](https://debuff.jp/research/how-spryte-got-fast):** the research write-up, from the first profile to the 8-byte instance format
 - **[Migrating from PixiJS](https://debuff.jp/spryte/migrating-from-pixijs):** the mental model, side-by-side code and a mapping table
 - [Changelog](CHANGELOG.md)
 - [Roadmap](https://github.com/debuffjp/debuff/blob/main/docs/roadmap.md#spryte)
