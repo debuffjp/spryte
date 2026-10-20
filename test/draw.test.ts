@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend, ClipRect, Matrix, TextureSource } from "../src/backend.js";
 import { Draw } from "../src/draw.js";
 import { toRGBA } from "../src/index.js";
@@ -148,5 +148,61 @@ describe("Draw.clip", () => {
       }),
     ).toThrow("boom");
     expect(clips.at(-1)).toBeNull();
+  });
+});
+
+describe("text cache", () => {
+  // A stand-in OffscreenCanvas: enough 2D context for measuring and filling text.
+  beforeEach(() => {
+    const ctx = {
+      font: "",
+      fillStyle: "",
+      textBaseline: "",
+      scale() {},
+      fillText() {},
+      measureText: (t: string) => ({ width: t.length * 8, fontBoundingBoxAscent: 12, fontBoundingBoxDescent: 4 }),
+    };
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        constructor(
+          public width: number,
+          public height: number,
+        ) {}
+        getContext() {
+          return ctx;
+        }
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps every string on screen, however many, instead of re-rasterising them each frame", () => {
+    const evicted: TextureSource[] = [];
+    const { draw, quads } = recorder();
+    (draw as unknown as { backend: Backend }).backend.invalidate = (src) => evicted.push(src);
+    const frame = () => {
+      draw.begin("#000", 100, 100, 1);
+      for (let i = 0; i < 600; i++) draw.text(String(i), 0, 0);
+    };
+    frame();
+    frame();
+    frame();
+    // 600 distinct strings a frame, well over the 256 floor: none evicted while they're still drawn.
+    expect(evicted).toHaveLength(0);
+    // Each frame drew the same 600 cached canvases.
+    expect(quads[0]?.src).toBe(quads[600]?.src);
+    expect(quads[0]?.src).toBe(quads[1200]?.src);
+  });
+
+  it("still evicts strings that left the screen", () => {
+    const evicted: TextureSource[] = [];
+    const { draw } = recorder();
+    (draw as unknown as { backend: Backend }).backend.invalidate = (src) => evicted.push(src);
+    for (let f = 0; f < 4; f++) {
+      draw.begin("#000", 100, 100, 1);
+      for (let i = 0; i < 200; i++) draw.text(`${f}:${i}`, 0, 0);
+    }
+    expect(evicted.length).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "spryte",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Blazing fast 2D renderer for the web: 2–4× faster than the most popular one, at a ninth of its size. Verified in an open benchmark.",
   "keywords": [
     "2d",

@@ -523,6 +523,7 @@ export class Draw {
 
   /** @internal */
   begin(clear: Color, width: number, height: number, scale: number): void {
+    this.textCache.frame++;
     this.renderScale = scale;
     this.viewW = width;
     this.viewH = height;
@@ -683,22 +684,32 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
 
 interface TextEntry {
   canvas: HTMLCanvasElement | OffscreenCanvas;
+  /** The frame it was last drawn in. */
+  frame: number;
   /** Logical size. */
   w: number;
   h: number;
   used: number;
 }
 
-/** LRU cache of rasterised text (white; tinted at draw time). */
+/**
+ * LRU cache of rasterised text (white; tinted at draw time). Holds at least 256 strings, and never evicts one
+ * drawn this frame or the last, so a screen with more distinct strings than that doesn't re-rasterise and
+ * re-upload all of them every frame.
+ */
 class TextCache {
   private readonly entries = new Map<string, TextEntry>();
   private clock = 0;
+  /** Advanced by `begin()`. */
+  frame = 0;
+  private limit = 256;
 
   get(text: string, font: string, scale: number, evict: (src: TextureSource) => void): TextEntry {
     const key = `${scale}|${font}|${text}`;
     const hit = this.entries.get(key);
     if (hit) {
       hit.used = ++this.clock;
+      hit.frame = this.frame;
       return hit;
     }
     const measureCtx = makeCanvas(1, 1).getContext("2d") as CanvasRenderingContext2D | null;
@@ -718,15 +729,17 @@ class TextCache {
       ctx.textBaseline = "alphabetic";
       ctx.fillText(text, 1, 1 + ascent);
     }
-    const entry = { canvas, w, h, used: ++this.clock };
+    const entry = { canvas, w, h, used: ++this.clock, frame: this.frame };
     this.entries.set(key, entry);
-    if (this.entries.size > 256) {
-      // Evict the least recently used quarter.
-      const old = [...this.entries].sort((a, b) => a[1].used - b[1].used).slice(0, 64);
-      for (const [k, e] of old) {
+    if (this.entries.size > this.limit) {
+      // Evict the least recently used quarter, never anything drawn this frame or the last.
+      const stale = [...this.entries].filter(([, e]) => e.frame < this.frame - 1).sort((a, b) => a[1].used - b[1].used);
+      for (const [k, e] of stale.slice(0, Math.max(64, this.entries.size >> 2))) {
         this.entries.delete(k);
         evict(e.canvas);
       }
+      // Still full of live strings: the screen needs more, so make room for them.
+      this.limit = Math.max(256, this.entries.size * 2);
     }
     return entry;
   }

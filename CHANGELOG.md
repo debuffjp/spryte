@@ -1,5 +1,11 @@
 # spryte
 
+## 0.2.1
+
+### Patch Changes
+
+- 984a0eb: README: logo, what spryte is for beyond games, links to the guides and the PixiJS migration guide, and where to get help.
+
 ## 0.2.0
 
 ### Minor Changes
