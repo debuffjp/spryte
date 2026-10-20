@@ -1,0 +1,19 @@
+name: Migration question
+description: Moving from PixiJS (or another renderer) and something has no obvious equivalent
+labels: [migration]
+body:
+  - type: textarea
+    id: from
+    attributes:
+      label: What you're moving from
+      description: The library, version, and the API or pattern you use there.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried in spryte
+      render: ts
+  - type: markdown
+    attributes:
+      value: "The [migration guide](https://debuff.jp/spryte/migrating-from-pixijs) covers the common mappings. Quick questions are welcome on [Discord](https://discord.gg/jshbDHSpCY) too."

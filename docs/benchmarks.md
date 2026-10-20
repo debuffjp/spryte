@@ -1,6 +1,6 @@
 # spryte benchmarks
 
-**Short version:** on the same machine, assets and simulation, spryte is **2.0–3.8× faster than PixiJS 8** on comparable APIs, and ships about **9× less JavaScript** at startup. A pixel-parity gate confirms both draw the same scene before anything is timed. These are one desktop machine's numbers; phones and other browsers aren't measured yet.
+**Short version:** on the same machine, assets and simulation, spryte is **2.0–3.8× faster than PixiJS 8** on comparable APIs, and ships about **9× less JavaScript** at startup. A pixel-parity gate confirms both draw the same scene before anything is timed. These are one desktop machine's numbers. Across the other devices measured in [2dbench](https://github.com/debuffjp/2dbench#across-devices) (an RTX 4080 laptop on Linux, AMD integrated graphics, iPhones in Safari and Chrome, an Android phone in Firefox), spryte's one-call-per-sprite path is ahead on every one.
 
 ## Results, 2026-10-19
 
@@ -84,7 +84,7 @@ These rules are being generalised into **2dbench**, an open benchmark where any 
 
 ## Reading these honestly
 
-- **One machine and one browser.** There are no phone, integrated-GPU, Safari or Firefox results yet. spryte's lead is mostly CPU and upload bandwidth, so fill-rate-bound devices may narrow it. Phones can run `bench/renderer/mobile.html`.
+- **Devices differ, ratios hold.** The table above is one machine. In [2dbench](https://github.com/debuffjp/2dbench#across-devices), spryte's one-call-per-sprite path leads on every device so far (2.7–3.8× on desktops and iPhones, 1.6× on an Android phone). The bulk paths finish level on iPhones, where the GPU's fill rate is the limit. [Run it on your device](https://debuffjp.github.io/2dbench/mobile.html).
 - **Specialised against specialised, general against general.** The bulk rows compare `draw.sprites` with `ParticleContainer`, and the general rows compare `draw.sprite` with `Sprite`.
 - **Numbers from different days aren't comparable.** Only ratios within one run mean anything.
 - **Not covered yet:** tilemaps, text-heavy UI, clipping-heavy scenes, render targets and shaders, object churn, memory growth, load time, time to first frame.

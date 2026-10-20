@@ -75,6 +75,9 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 ## Docs
 
+- **Guides on debuff.jp:** [getting started](https://debuff.jp/spryte/getting-started), [sprites and frames](https://debuff.jp/spryte/sprites), [bulk sprites and particles](https://debuff.jp/spryte/bulk-sprites), [shapes and text](https://debuff.jp/spryte/shapes-and-text), [transforms and clipping](https://debuff.jp/spryte/transforms-and-clipping), [render targets and shaders](https://debuff.jp/spryte/render-targets-and-shaders), [pixel art](https://debuff.jp/spryte/pixel-art)
+- **[Migrating from PixiJS](https://debuff.jp/spryte/migrating-from-pixijs):** the mental model, a mapping table, and moving just your hot path first
+- [Changelog](CHANGELOG.md)
 - [API reference](https://github.com/debuffjp/spryte/blob/main/docs/api.md)
 - [Architecture](https://github.com/debuffjp/spryte/blob/main/docs/architecture.md)
 - [Benchmarks and method](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md)
@@ -88,6 +91,10 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 - `draw.invalidate(source)` re-uploads an image whose pixels changed. `draw.disposeTarget(t)` frees a render target.
 - `draw.dispose()` releases every GPU resource and listener. Using a disposed `Draw` throws.
 - WebGL context loss is handled: drawing pauses while the context is lost (`draw.contextLost`), and textures re-upload after it's restored. Render targets come back blank. This is checked with a real GPU context loss in `npm run test:browser`.
+
+## Help and feedback
+
+Questions, ideas and show-and-tell: [Discord](https://discord.gg/jshbDHSpCY). Bugs: [open an issue](https://github.com/debuffjp/spryte/issues/new/choose) with your browser, GPU and a small repro.
 
 ## Sponsors
 

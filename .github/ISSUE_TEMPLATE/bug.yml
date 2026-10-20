@@ -1,0 +1,31 @@
+name: Bug report
+description: Something draws wrong, throws, or is slower than it should be
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest code that shows it
+      description: A few lines with createRenderer and the draw calls, or a link to a CodePen/StackBlitz.
+      render: ts
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Browser, OS and GPU
+      description: For example "Chrome 155, Windows 11, RTX 4060". `draw.kind` (webgl2 or 2d) helps too.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: spryte version
+    validations:
+      required: true
