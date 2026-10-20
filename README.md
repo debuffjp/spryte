@@ -79,7 +79,7 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 ## Sponsors
 
-spryte, debuff and 2dbench are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: Bronze and up puts your logo here, Silver and Gold on [debuff.jp](https://debuff.jp) too. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
+spryte, debuff and 2dbench are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: from Power-up ($100/month) your logo goes here and on [debuff.jp](https://debuff.jp), with bigger placements as you level up. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
 
 ## Licence
 
