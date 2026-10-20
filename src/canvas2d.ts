@@ -8,8 +8,10 @@ type Surface = HTMLCanvasElement | OffscreenCanvas;
 
 /**
  * Canvas 2D fallback for the `draw` API. Same output for solid shapes, sprites, text and alpha.
- * Canvas 2D has no per-draw tint, so tinted textures (text, bitmap fonts, `tint`) go through a scratch
- * canvas: slower than WebGL2, but only when a tint other than white is asked for.
+ * Canvas 2D has no per-draw tint, so tinted or flashed textures (text, bitmap fonts, `tint`, `flash`) are
+ * recoloured once on the CPU (getImageData) and cached per source, frame, colour and flash; render target
+ * sources are recoloured on every draw. Untinted draws skip all of this. Anti-aliased edges of rotated or
+ * fractionally placed sprites can differ slightly from WebGL2: that's Canvas 2D's own rasteriser.
  */
 export class Canvas2DBackend implements Backend {
   readonly kind = "2d" as const;
@@ -24,6 +26,8 @@ export class Canvas2DBackend implements Backend {
   private scale = 1;
   private smoothing: boolean | undefined;
   private scratch: HTMLCanvasElement | OffscreenCanvas | undefined;
+  /** Recoloured frames per source, keyed by rect, tint and flash. */
+  private shades = new WeakMap<object, Map<string, Surface>>();
   private clipped = false;
   private blendMode: BlendMode = "normal";
 
@@ -73,12 +77,9 @@ export class Canvas2DBackend implements Backend {
     }
     const image = src instanceof RenderTarget ? this.surface(src) : src;
     ctx.globalAlpha = (color & 0xff) / 255;
-    if (color >>> 8 === 0xffffff) ctx.drawImage(image, sx, sy, sw, sh, 0, 0, 1, 1);
-    else ctx.drawImage(this.tinted(image, sx, sy, sw, sh, color), 0, 0, sw, sh, 0, 0, 1, 1);
-    if (flash > 0) {
-      ctx.globalAlpha *= Math.min(1, flash);
-      ctx.drawImage(this.whiteSilhouette(image, sx, sy, sw, sh), 0, 0, sw, sh, 0, 0, 1, 1);
-    }
+    const rgb = color >>> 8;
+    if (rgb === 0xffffff && !(flash > 0)) ctx.drawImage(image, sx, sy, sw, sh, 0, 0, 1, 1);
+    else ctx.drawImage(this.shaded(image, src instanceof RenderTarget, sx, sy, sw, sh, rgb, flash), 0, 0, sw, sh, 0, 0, 1, 1);
   }
 
   quads(
@@ -153,8 +154,8 @@ export class Canvas2DBackend implements Backend {
     this.smoothing = undefined;
   }
 
-  invalidate(): void {
-    // Canvas 2D reads sources directly; nothing is cached.
+  invalidate(src: TextureSource): void {
+    this.shades.delete(src);
   }
 
   dispose(): void {}
@@ -207,41 +208,64 @@ export class Canvas2DBackend implements Backend {
     return surface;
   }
 
-  /** The source region multiplied by `color`'s RGB, keeping the source's alpha. */
-  private tinted(src: CanvasImageSource, x: number, y: number, w: number, h: number, color: number): HTMLCanvasElement | OffscreenCanvas {
-    const scratch = this.scratchCanvas(w, h);
-    const sctx = scratch.getContext("2d") as CanvasRenderingContext2D | null;
-    if (!sctx) return scratch;
-    sctx.clearRect(0, 0, w, h);
-    sctx.globalCompositeOperation = "source-over";
-    sctx.drawImage(src, x, y, w, h, 0, 0, w, h);
-    sctx.globalCompositeOperation = "multiply";
-    sctx.fillStyle = rgbaToCss(color | 0xff);
-    sctx.fillRect(0, 0, w, h);
-    // multiply filled the transparent pixels too; cut back to the source's shape.
-    sctx.globalCompositeOperation = "destination-in";
-    sctx.drawImage(src, x, y, w, h, 0, 0, w, h);
-    sctx.globalCompositeOperation = "source-over";
-    return scratch;
+  /**
+   * The source region with `rgb` multiplied in and mixed toward white by `flash`, alpha kept: the WebGL2
+   * shader's `mix(texel * tint, vec3(texel.a), flash)` in straight alpha. Canvas composite modes can't do this
+   * exactly on partly transparent pixels, so it's done per pixel and cached (render targets change, so not those).
+   */
+  private shaded(src: CanvasImageSource, live: boolean, x: number, y: number, w: number, h: number, rgb: number, flash: number): Surface {
+    const f = Math.round(Math.min(1, Math.max(0, flash || 0)) * 255);
+    const key = `${x},${y},${w},${h},${rgb},${f}`;
+    let cache = live ? undefined : this.shades.get(src);
+    const hit = cache?.get(key);
+    if (hit) return hit;
+    const pw = Math.ceil(w);
+    const ph = Math.ceil(h);
+    const out: Surface = live ? this.scratchCanvas(pw, ph) : newSurface(pw, ph);
+    const octx = out.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | null;
+    if (!octx) return out;
+    octx.globalCompositeOperation = "copy";
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(src, x, y, w, h, 0, 0, w, h);
+    const data = octx.getImageData(0, 0, pw, ph);
+    const d = data.data;
+    const r = (rgb >>> 16) & 0xff;
+    const g = (rgb >>> 8) & 0xff;
+    const b = rgb & 0xff;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = mixWhite(((d[i] as number) * r) / 255, f);
+      d[i + 1] = mixWhite(((d[i + 1] as number) * g) / 255, f);
+      d[i + 2] = mixWhite(((d[i + 2] as number) * b) / 255, f);
+    }
+    octx.putImageData(data, 0, 0);
+    if (!live) {
+      if (!cache) {
+        cache = new Map();
+        this.shades.set(src, cache);
+      }
+      // Animated tints would grow this forever; start over rather than track recency.
+      if (cache.size >= 256) cache.clear();
+      cache.set(key, out);
+    }
+    return out;
   }
 
   private scratchCanvas(w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
-    if (!this.scratch) this.scratch = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h) : document.createElement("canvas");
+    if (!this.scratch) this.scratch = newSurface(w, h);
     if (this.scratch.width < w) this.scratch.width = w;
     if (this.scratch.height < h) this.scratch.height = h;
     return this.scratch;
   }
+}
 
-  private whiteSilhouette(src: CanvasImageSource, x: number, y: number, w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
-    const scratch = this.scratchCanvas(w, h);
-    const sctx = scratch.getContext("2d") as CanvasRenderingContext2D | null;
-    if (!sctx) return scratch;
-    sctx.clearRect(0, 0, w, h);
-    sctx.globalCompositeOperation = "source-over";
-    sctx.drawImage(src, x, y, w, h, 0, 0, w, h);
-    sctx.globalCompositeOperation = "source-in";
-    sctx.fillStyle = "#fff";
-    sctx.fillRect(0, 0, w, h);
-    return scratch;
-  }
+function newSurface(w: number, h: number): Surface {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+function mixWhite(c: number, f: number): number {
+  return Math.round(c + ((255 - c) * f) / 255);
 }

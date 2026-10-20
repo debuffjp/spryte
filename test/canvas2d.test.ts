@@ -78,7 +78,7 @@ describe("Draw.measure", () => {
 });
 
 describe("Canvas2DBackend tint", () => {
-  it("draws untinted textures directly and tinted ones through a scratch copy", () => {
+  it("draws untinted textures directly and tinted ones through a recoloured copy", () => {
     const { ctx, calls } = recordingContext();
     const backend = new Canvas2DBackend(ctx);
     const src = { width: 4, height: 4 } as unknown as HTMLCanvasElement;
