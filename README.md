@@ -43,22 +43,22 @@ Games are where spryte started, but anything that draws lots of moving 2D things
 
 ## Why spryte
 
-Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved rounds, after a pixel-parity gate (desktop Chrome, RTX 5060 laptop). The comparison survived an adversarial fairness review, which lowered two of our earlier numbers. Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
+Against PixiJS 8 on the same machine, assets and simulation, over 3–7 interleaved rounds in [2dbench](https://github.com/debuffjp/2dbench), after a pixel-parity gate (desktop Chrome, RTX 5060 laptop, spryte 0.2.1). The comparison went through a fairness review aimed at breaking it. Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
 
 | | spryte | PixiJS 8 | |
 | --- | --- | --- | --- |
 | JS at startup (brotli) | **10.1 kB** | 87.8 kB | ~9× smaller |
-| 200k particles, per-particle scale, rotation, tint and alpha all changing | **7.7 ms** | 28.9 ms (`ParticleContainer`) | 3.8× faster |
-| 50k sprites with rotation, scale and tint, one call each | **9.8 ms** | 32.3 ms (`Sprite`) | 3.3× faster |
-| 200k sprites, position only, bulk | **4.4 ms** | 8.9 ms (`ParticleContainer`) | 2.0× faster |
+| 200k particles, per-particle scale, rotation, tint and alpha all changing | **5.8 ms** | 24.2 ms (`ParticleContainer`) | 4.2× faster |
+| 50k sprites with rotation, scale and tint, one call each | **7.8 ms** | 27.1 ms (`Sprite`) | 3.5× faster |
+| 200k sprites, position only, bulk | **2.8 ms** | 7.2 ms (`ParticleContainer`) | 2.6× faster |
 
 ![Most sprites each library holds at 60 fps, per 2dbench scene](docs/charts/max-at-60fps.svg)
 
 ![Frame time by sprite count for dynamic particles: spryte and PixiJS, with the 60 fps budget](docs/charts/particles.svg)
 
-*Charts from [2dbench](https://github.com/debuffjp/2dbench) (3–7 rounds depending on the scene; the table above is spryte's own bench, 3 rounds). Lower lines are faster; the dashed line is the 60 fps budget.*
+*Charts from [2dbench](https://github.com/debuffjp/2dbench), the same run as the table (3–7 rounds depending on the scene). Lower lines are faster; the dashed line is the 60 fps budget.*
 
-In [2dbench](https://github.com/debuffjp/2dbench)'s raycaster scene (a retro first-person maze drawn as thousands of texture slices), spryte held 10,000 enemies at 60 fps against PixiJS `Sprite`'s 2,000. The gap is per-sprite work: a PixiJS `Sprite` is a scene-graph object updated, bounded and batched every frame, while spryte writes a few numbers per sprite into a typed array and the GPU expands them. Static scenes, where PixiJS can cache, are much closer.
+In [2dbench](https://github.com/debuffjp/2dbench)'s raycaster scene (a retro first-person maze drawn as thousands of texture slices), spryte held 20,000 enemies at 60 fps against PixiJS `Sprite`'s 5,000. The gap is per-sprite work: a PixiJS `Sprite` is a scene-graph object updated, bounded and batched every frame, while spryte writes a few numbers per sprite into a typed array and the GPU expands them. Static scenes, where PixiJS can cache, are much closer.
 
 - **Bulk sprites with no per-sprite JavaScript.** On WebGL2, pass a `Float32Array` of positions (plus optional per-copy scale, rotation and colour arrays) and spryte uploads it as is.
 - **Immediate mode.** There are no display objects to create, pool or destroy. Draw what you want this frame.
