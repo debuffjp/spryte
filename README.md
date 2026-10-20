@@ -77,6 +77,10 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 - `draw.dispose()` releases every GPU resource and listener. Using a disposed `Draw` throws.
 - WebGL context loss is handled: drawing pauses while the context is lost (`draw.contextLost`), and textures re-upload after it's restored. Render targets come back blank. This is checked with a real GPU context loss in `npm run test:browser`.
 
+## Sponsors
+
+spryte, debuff and 2dbench are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: Bronze and up puts your logo here, Silver and Gold on [debuff.jp](https://debuff.jp) too. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
+
 ## Licence
 
 MIT
