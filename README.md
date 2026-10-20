@@ -96,9 +96,9 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 Questions, ideas and show-and-tell: [Discord](https://discord.gg/jshbDHSpCY). Bugs: [open an issue](https://github.com/debuffjp/spryte/issues/new/choose) with your browser, GPU and a small repro.
 
-## Sponsors
+## Work with us
 
-All of our projects are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: from Power-up ($100/month) your logo goes here and on [debuff.jp](https://debuff.jp), with bigger placements as you level up. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
+All of our projects are free and MIT licensed. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
 
 ## Licence
 
