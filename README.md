@@ -31,6 +31,16 @@ function frame() {
 requestAnimationFrame(frame);
 ```
 
+## What it's for
+
+Games are where spryte started, but anything that draws lots of moving 2D things in a browser fits:
+
+- **Games:** bullet hells, particle effects, crowds, tile maps, sprite-sheet animation.
+- **Data visualisation:** animated scatter plots, flow fields, live sensor and market data with thousands of points.
+- **Creative coding and generative art:** particle systems, trails and shader effects, without a framework.
+- **Interactive sites and product UI:** hero animations, confetti, backgrounds and effects that stay smooth on phones.
+- **Simulations and education:** agent-based models, physics demos and visual explanations.
+
 ## Why spryte
 
 Against PixiJS 8 on the same machine, assets and simulation, over 3 interleaved rounds, after a pixel-parity gate (desktop Chrome, RTX 5060 laptop). The comparison survived an adversarial fairness review, which lowered two of our earlier numbers. Method, raw data and caveats are in [benchmarks](https://github.com/debuffjp/spryte/blob/main/docs/benchmarks.md).
@@ -81,7 +91,7 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 ## Sponsors
 
-spryte, debuff and 2dbench are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: from Power-up ($100/month) your logo goes here and on [debuff.jp](https://debuff.jp), with bigger placements as you level up. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
+All of our projects are free and MIT licensed. [Sponsor on GitHub](https://github.com/sponsors/debuffjp) to keep them that way: from Power-up ($100/month) your logo goes here and on [debuff.jp](https://debuff.jp), with bigger placements as you level up. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
 
 ## Licence
 
