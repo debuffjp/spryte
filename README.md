@@ -1,3 +1,5 @@
+<img src="docs/brand/icon.svg" alt="spryte" width="96">
+
 # spryte
 
 **Blazing fast 2D rendering for the web: 2–4× faster than the most popular renderer, at a ninth of its size.** Every number is checked pixel for pixel in [2dbench](https://github.com/debuffjp/2dbench), an open benchmark you can [run on your own device](https://debuffjp.github.io/2dbench/mobile.html).
