@@ -136,13 +136,19 @@ for (const backend of ["webgl2", "2d"] as const) {
   const color = Uint32Array.from({ length: n }, (_, i) => [0xffffffff, 0xff8080ff, 0x80ff80c0, 0x8080ff80][i % 4] as number);
   const hex = (c: number) => `#${c.toString(16).padStart(8, "0")}`;
   // Copy 0 has rotation 0 at a half-pixel position, so it also checks per-copy pixel snapping.
+  // Rotated copies: sprite() takes cos/sin on the CPU, sprites() in the shader. A GPU's sin/cos can differ from
+  // Math's in the last bits (SwiftShader does), flipping a few edge pixels, so WebGL2 allows 8 of ~4,000–7,000.
+  // Canvas 2D gets the same values on both paths and stays exact, which still catches real bugs (a snapping
+  // bug showed on both backends).
+  const ROTATED_EDGE = 8;
   const variants: [string, { scale?: Float32Array; rotation?: Float32Array; color?: Uint32Array }, number][] = [
     ["scale + colour (snapped)", { scale, color }, 0],
     ["scale + rotation + colour", { scale, rotation, color }, 0],
     ["rotation only", { rotation }, 0],
   ];
   for (const backend of ["webgl2", "2d"] as const)
-    for (const [name, each, tolerance] of variants) {
+    for (const [name, each, exact] of variants) {
+      const tolerance = backend === "webgl2" && each.rotation ? Math.max(exact, ROTATED_EDGE) : exact;
       const loop = await render((draw) => {
         for (let i = 0; i < n; i++)
           draw.sprite(img, pos[i * 2] as number, pos[i * 2 + 1] as number, {
@@ -309,6 +315,39 @@ vec4 effect(vec4 color, vec2 uv) {
       if (Math.abs((a[0] as number) - (b[0] as number)) > 24) differ++;
     }
   check("ADV Canvas 2D smoothing survives a clip (matches WebGL2)", differ < 20, `${differ} px differ by > 24`);
+}
+
+// Canvas 2D tint and flash on partly transparent pixels match WebGL2, on the canvas and in a transparent
+// render target (whose alpha then shows when it's drawn).
+{
+  const half = document.createElement("canvas");
+  half.width = 8;
+  half.height = 8;
+  const g = half.getContext("2d") as CanvasRenderingContext2D;
+  g.fillStyle = "#cffb2d";
+  g.fillRect(0, 0, 8, 8);
+  g.clearRect(0, 2, 8, 2);
+  g.fillStyle = "rgba(255,255,0,0.5)";
+  g.fillRect(0, 2, 8, 2);
+  g.fillStyle = "rgba(200,40,90,0.25)";
+  g.fillRect(0, 6, 8, 2);
+  const paint = (draw: Draw) => {
+    draw.sprite(half, 4, 4, { origin: [0, 0], scaleX: 4, scaleY: 4, tint: "#40c0ff", alpha: 0.6 });
+    draw.sprite(half, 40, 4, { origin: [0, 0], scaleX: 4, scaleY: 4, flash: 0.7 });
+    draw.sprite(half, 76, 4, { origin: [0, 0], scaleX: 4, scaleY: 4, tint: "#ff8040", flash: 0.4, alpha: 0.8 });
+  };
+  const scene = (draw: Draw) => {
+    paint(draw);
+    const t = draw.createTarget(W, 40);
+    draw.into(t, () => paint(draw), 0);
+    draw.sprite(t, 0, 50, { origin: [0, 0] });
+    draw.disposeTarget(t);
+  };
+  const gl2 = await render(scene, "webgl2", 1);
+  const c2d = await render(scene, "2d", 1);
+  let worst = 0;
+  for (let i = 0; i < gl2.length; i++) worst = Math.max(worst, Math.abs((gl2[i] as number) - (c2d[i] as number)));
+  check("Canvas 2D tint/flash on partial alpha matches WebGL2", worst <= 2, `max channel error ${worst}`);
 }
 
 // Real context loss (WEBGL_lose_context): drawing while lost is skipped without errors, and after restore
