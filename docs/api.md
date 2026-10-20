@@ -8,6 +8,7 @@ Everything is exported from `spryte`. Units are **logical**: you choose them in 
 | --- | --- | --- |
 | `backend` | `"auto"` | `"auto"`: WebGL2, falling back to Canvas 2D. `"webgl2"`: throws if WebGL2 is unavailable. `"2d"`: always Canvas 2D. |
 | `smooth` | `true` | Default image filtering. Use `false` for pixel art. Can be overridden per sprite. |
+| `transparent` | `false` | See-through canvas: clear with an alpha colour (`"#0000"`) to draw over the page or another canvas, such as particles over a PixiJS scene. Opaque is slightly cheaper for the compositor. |
 
 The Canvas 2D backend is a separate chunk, loaded only on fallback. Until it arrives (a few milliseconds), frames draw nothing.
 

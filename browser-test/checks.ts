@@ -412,4 +412,35 @@ vec4 effect(vec4 color, vec2 uv) {
   draw.dispose();
 }
 
+// transparent: true. A see-through clear replaces last frame (not blends over it), and drawn pixels are opaque.
+for (const backend of ["webgl2", "2d"] as const) {
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const draw = createRenderer(canvas, { backend, smooth: false, transparent: true });
+  await draw.ready;
+  draw.resize(W, H);
+  draw.begin("#f00", W, H, 1); // an opaque first frame, to prove the next clear removes it
+  draw.end();
+  draw.begin("#0000", W, H, 1);
+  draw.rect(10, 10, 20, 20, "#0f0");
+  draw.end();
+  const raw = draw.raw;
+  const px = (x: number, y: number) => {
+    const out = new Uint8Array(4);
+    if (raw.kind === "webgl2") raw.gl.readPixels(x, H - 1 - y, 1, 1, raw.gl.RGBA, raw.gl.UNSIGNED_BYTE, out);
+    else out.set(raw.ctx.getImageData(x, y, 1, 1).data);
+    return [...out];
+  };
+  const outside = px(2, 2);
+  const inside = px(20, 20);
+  check(
+    `transparent canvas: see-through clear, opaque draws (${backend})`,
+    outside[3] === 0 && inside[1] === 255 && inside[3] === 255,
+    `outside ${outside} / inside ${inside}`,
+  );
+  draw.dispose();
+  if (raw.kind === "webgl2") raw.gl.getExtension("WEBGL_lose_context")?.loseContext();
+}
+
 (window as unknown as { __checks: unknown }).__checks = results;

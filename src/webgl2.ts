@@ -337,7 +337,9 @@ export class WebGL2Backend implements Backend {
     if (this.active !== this.main) this.setShader(null);
     this.viewW = width;
     this.viewH = height;
-    gl.clearColor((clear >>> 24) / 255, ((clear >>> 16) & 0xff) / 255, ((clear >>> 8) & 0xff) / 255, (clear & 0xff) / 255);
+    // The canvas is premultiplied, so a see-through clear colour is premultiplied too (opaque colours are unchanged).
+    const a = (clear & 0xff) / 255;
+    gl.clearColor(((clear >>> 24) / 255) * a, (((clear >>> 16) & 0xff) / 255) * a, (((clear >>> 8) & 0xff) / 255) * a, a);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.submitted = 0;
   }

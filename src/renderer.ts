@@ -7,6 +7,12 @@ export interface RendererOptions {
   backend?: "auto" | "webgl2" | "2d";
   /** Linear filtering for images by default. Pass false for pixel art. Default true. */
   smooth?: boolean;
+  /**
+   * See-through canvas: a clear colour with alpha (such as `"#0000"`) lets the page, or another canvas, show
+   * through. For overlays, such as drawing particles over a PixiJS or DOM scene. Default false (opaque, which
+   * lets the compositor skip blending).
+   */
+  transparent?: boolean;
 }
 
 /**
@@ -23,7 +29,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     // alpha:false lets the compositor skip blending; desynchronized lowers input latency where supported.
     // preserveDrawingBuffer:false is fastest; captures render and read in the same task.
     const gl = canvas.getContext("webgl2", {
-      alpha: false,
+      alpha: options.transparent ?? false,
       antialias: false,
       premultipliedAlpha: true,
       desynchronized: true,
@@ -33,7 +39,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     if (choice === "webgl2")
       throw new Error('spryte: WebGL2 is unavailable in this browser (use backend: "auto" to fall back to Canvas 2D)');
   }
-  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+  const ctx = canvas.getContext("2d", { alpha: options.transparent ?? false, desynchronized: true });
   if (!ctx) throw new Error("spryte: no WebGL2 or Canvas 2D context available (is the canvas already using another context type?)");
   const draw = new Draw(pending(ctx), options.smooth ?? true);
   draw.ready = import("./canvas2d.js").then(
