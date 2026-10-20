@@ -5,4 +5,4 @@ contact_links:
     about: Questions, ideas and show-and-tell.
   - name: Migrating from PixiJS
     url: https://debuff.jp/spryte/migrating-from-pixijs
-    about: The mental model, a mapping table, and moving just your hot path.
+    about: The mental model, side-by-side code and a mapping table.
