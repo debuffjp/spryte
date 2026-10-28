@@ -98,6 +98,12 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 Questions, ideas and show-and-tell: [Discord](https://discord.gg/jshbDHSpCY). Bugs: [open an issue](https://github.com/debuffjp/spryte/issues/new/choose) with your browser, GPU and a small repro.
 
+## Sponsors
+
+<a href="https://wvd.sh"><img src="https://avatars.githubusercontent.com/u/185831036?s=128&v=4" width="64" height="64" alt="Wavedash"></a>
+
+Thanks to [Wavedash](https://wvd.sh). [Sponsor spryte](https://github.com/sponsors/debuffjp) to join them.
+
 ## Work with us
 
 All of our projects are free and MIT licensed. Studios after performance help or a bigger partnership: [greg@updog.jp](mailto:greg@updog.jp).
