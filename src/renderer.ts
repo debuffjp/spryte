@@ -62,6 +62,7 @@ function pending(ctx: CanvasRenderingContext2D): Backend {
     raw: { kind: "2d", ctx },
     begin: noop,
     quad: noop,
+    path: noop,
     quads: noop,
     copies: noop,
     setBlend: noop,

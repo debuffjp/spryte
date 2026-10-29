@@ -1,0 +1,9 @@
+{
+  "name": "spryte-example-phaser",
+  "private": true,
+  "type": "module",
+  "description": "spryte drawing inside a Phaser 4 game, with real-GPU checks (npm install here, then `npm run test:phaser` in packages/spryte).",
+  "devDependencies": {
+    "phaser": "4.2.1"
+  }
+}

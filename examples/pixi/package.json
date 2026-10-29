@@ -1,0 +1,9 @@
+{
+  "name": "spryte-example-pixi",
+  "private": true,
+  "type": "module",
+  "description": "spryte drawing inside a PixiJS v8 app, with real-GPU checks (`npm run test:pixi` in packages/spryte).",
+  "devDependencies": {
+    "pixi.js": "8.22.0"
+  }
+}

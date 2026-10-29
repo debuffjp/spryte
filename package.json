@@ -1,7 +1,7 @@
 {
   "name": "spryte",
-  "version": "0.2.1",
-  "description": "Blazing fast 2D renderer for the web: 2–4× faster than the most popular one, at a ninth of its size. Verified in an open benchmark.",
+  "version": "0.7.3",
+  "description": "Blazing fast 2D renderer for the web: 2-4x faster than the most popular one, at about a seventh of its size. Verified in an open benchmark.",
   "keywords": [
     "2d",
     "renderer",
@@ -15,7 +15,8 @@
     "browser-game"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/debuffjp/spryte#readme",
+  "funding": "https://github.com/sponsors/debuffjp",
+  "homepage": "https://debuff.jp/spryte/",
   "bugs": "https://github.com/debuffjp/spryte/issues",
   "repository": {
     "type": "git",
@@ -29,6 +30,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./phaser": {
+      "types": "./dist/phaser.d.ts",
+      "default": "./dist/phaser.js"
+    },
+    "./pixi": {
+      "types": "./dist/pixi.d.ts",
+      "default": "./dist/pixi.js"
     }
   },
   "files": [
@@ -41,6 +50,10 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "example": "vite examples/minimal",
+    "example:phaser": "vite examples/phaser",
+    "test:phaser": "node examples/phaser/check.mjs",
+    "example:pixi": "vite examples/pixi",
+    "test:pixi": "node examples/pixi/check.mjs",
     "test:browser": "node browser-test/run.mjs"
   },
   "publishConfig": {

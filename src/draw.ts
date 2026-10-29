@@ -1,7 +1,7 @@
 import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } from "./backend.js";
 import type { BitmapFont } from "./bitmap-font.js";
 import { type Color, toRGBA } from "./color.js";
-import type { SpritesEach } from "./copies.js";
+import { placeAt, type SpritesEach } from "./copies.js";
 import { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
@@ -62,27 +62,46 @@ export class Draw {
   /** Preallocated transform stack: push/pop copy six numbers and never allocate. */
   private readonly stack: Matrix[] = [];
   private depth = 0;
-  private readonly m: Matrix = [1, 0, 0, 1, 0, 0];
+  /** @internal */
+  readonly m: Matrix = [1, 0, 0, 1, 0, 0];
+  /** @internal Bumped whenever `m` changes, so backends can skip comparing the transform per sprite. */
+  mver = 0;
   private readonly frames = new WeakMap<TextureSource, Frame>();
   private lastImage: TextureSource | null = null;
   private lastFrame: Frame | undefined;
-  private readonly clips: ClipRect[] = [];
-  private shader: Shader | null = null;
+  /** @internal */
+  readonly clips: ClipRect[] = [];
+  /** @internal */
+  shader: Shader | null = null;
   /** The render target being drawn into, or null for the canvas. */
-  private target: RenderTarget | null = null;
-  /** The canvas's logical size this frame, to switch back to after `into()`. */
-  private viewW = 1;
-  private viewH = 1;
-  private readonly tmp: Matrix = [1, 0, 0, 1, 0, 0];
+  /** @internal */
+  target: RenderTarget | null = null;
+  /** The canvas's logical size this frame. */
+  /** @internal */
+  viewW = 1;
+  /** @internal */
+  viewH = 1;
+  /** The logical size of the current destination: the canvas, a target inside `into()`, or a mask or filter pass. */
+  /** @internal */
+  destW = 1;
+  /** @internal */
+  destH = 1;
+  /** @internal */
+  readonly tmp: Matrix = [1, 0, 0, 1, 0, 0];
   private readonly textCache = new TextCache();
-  private circleTexture: HTMLCanvasElement | OffscreenCanvas | undefined;
+  /** Antialiased white circles, 64, 256 and 1024px across, each made on first use. */
+  private readonly circleTextures: (HTMLCanvasElement | OffscreenCanvas | undefined)[] = [];
 
-  private backingW = 0;
-  private backingH = 0;
+  /** @internal */
+
+  backingW = 0;
+  /** @internal */
+  backingH = 0;
 
   /** @internal */
   constructor(
-    private backend: Backend,
+    /** @internal */
+    public backend: Backend,
     /** Default filtering for images (false for pixel art). */
     public smooth: boolean,
   ) {}
@@ -124,12 +143,31 @@ export class Draw {
     if (this.depth === 0) throw new Error("draw.pop() without a matching push()");
     this.depth--;
     copy(this.stack[this.depth] as Matrix, this.m);
+    this.mver++;
   }
 
   translate(x: number, y: number): void {
     const m = this.m;
     m[4] += m[0] * x + m[2] * y;
     m[5] += m[1] * x + m[3] * y;
+    this.mver++;
+  }
+
+  /**
+   * Multiply a matrix `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f, the Canvas order) onto the
+   * current transform, the way `translate`, `scale` and `rotate` do. For a camera or parent transform another
+   * engine computed, which can include skew that those three can't express.
+   */
+  transform(a: number, b: number, c: number, d: number, e: number, f: number): void {
+    const m = this.m;
+    const [m0, m1, m2, m3] = m;
+    m[4] += m0 * e + m2 * f;
+    m[5] += m1 * e + m3 * f;
+    m[0] = m0 * a + m2 * b;
+    m[1] = m1 * a + m3 * b;
+    m[2] = m0 * c + m2 * d;
+    m[3] = m1 * c + m3 * d;
+    this.mver++;
   }
 
   scale(x: number, y = x): void {
@@ -138,6 +176,7 @@ export class Draw {
     m[1] *= x;
     m[2] *= y;
     m[3] *= y;
+    this.mver++;
   }
 
   rotate(radians: number): void {
@@ -148,6 +187,7 @@ export class Draw {
     this.m[1] = b * c + d * s;
     this.m[2] = cc * c - a * s;
     this.m[3] = d * c - b * s;
+    this.mver++;
   }
 
   /**
@@ -204,6 +244,7 @@ export class Draw {
     m[3] = mb * c + md * d;
     m[4] = ma * e + mc * f + me;
     m[5] = mb * e + md * f + mf;
+    this.mver++;
     try {
       fn();
     } finally {
@@ -214,6 +255,7 @@ export class Draw {
   // ---- drawing ---------------------------------------------------------------------------
 
   blend(mode: BlendMode): void {
+    this.blendMode = mode;
     this.backend.setBlend(mode);
   }
 
@@ -226,9 +268,13 @@ export class Draw {
   /** Filled circle (antialiased). */
   circle(x: number, y: number, radius: number, color: Color): void {
     this.local(x - radius, y - radius, radius * 2, radius * 2);
-    const tex = this.circle64();
+    // Pick the texture closest to the circle's size on screen: magnified, a small one blurs; shrunk a lot, a big
+    // one (no mipmaps) gets jaggy.
+    const m = this.m;
+    const device = radius * Math.hypot(m[0], m[1]) * (this.backingW ? this.backingW / this.viewW : 1);
+    const size = device <= 40 ? 64 : device <= 160 ? 256 : 1024;
     this.quads++;
-    this.backend.quad(this.tmp, tex, 0, 0, 64, 64, this.withAlpha(toRGBA(color), 1), 0, true);
+    this.backend.quad(this.tmp, this.circleTexture(size), 0, 0, size, size, this.withAlpha(toRGBA(color), 1), 0, true);
   }
 
   line(x1: number, y1: number, x2: number, y2: number, width: number, color: Color): void {
@@ -245,6 +291,13 @@ export class Draw {
 
   /** Draw an image frame (or a whole image) at `x, y`, anchored by `origin`. Allocation-free hot path. */
   sprite(frame: Frame | TextureSource, x: number, y: number, o: SpriteDrawOptions = NO_OPTIONS): void {
+    const b = this.backend;
+    if (b.sprite) {
+      // The backend does the transform algebra itself (on the GPU).
+      this.quads++;
+      b.sprite(this.mver, this.m, this.frameOf(frame), x, y, o, this.spriteColor(o), o.smooth ?? this.smooth);
+      return;
+    }
     const f = this.place(frame, x, y, o);
     const t = this.tmp;
     const smooth = o.smooth ?? this.smooth;
@@ -269,9 +322,16 @@ export class Draw {
    * // ...update pos...
    * draw.sprites(spark, pos, live, { tint: "#ffd36b", alpha: 0.8 });
    * ```
+   *
+   * Per-copy scale, rotation, colour and frame go in `each`. For a frame per copy, pass the frames as an
+   * array and index it with `each.frame`:
+   *
+   * ```ts
+   * draw.sprites(itemFrames, pos, n, {}, { frame: itemKind });
+   * ```
    */
   sprites(
-    frame: Frame | TextureSource,
+    frame: Frame | TextureSource | readonly Frame[],
     positions: ArrayLike<number>,
     count = positions.length >> 1,
     o: SpriteDrawOptions = NO_OPTIONS,
@@ -283,13 +343,14 @@ export class Draw {
       if (each.scale) count = Math.min(count, each.scale.length);
       if (each.rotation) count = Math.min(count, each.rotation.length);
       if (each.color) count = Math.min(count, each.color.length);
+      if (each.frame) count = Math.min(count, each.frame.length);
     }
     if (count <= 0) return;
-    if (each && (each.scale || each.rotation || each.color)) {
+    if (each && (each.scale || each.rotation || each.color || each.frame)) {
       this.spritesEach(frame, positions, count, o, each);
       return;
     }
-    const f = this.place(frame, 0, 0, o);
+    const f = this.place(Array.isArray(frame) ? (frame[0] as Frame) : (frame as Frame | TextureSource), 0, 0, o);
     const t = this.tmp;
     const smooth = o.smooth ?? this.smooth;
     // Snapped per copy, like sprite().
@@ -299,13 +360,27 @@ export class Draw {
   }
 
   private spritesEach(
-    frame: Frame | TextureSource,
+    frame: Frame | TextureSource | readonly Frame[],
     positions: ArrayLike<number>,
     count: number,
     o: SpriteDrawOptions,
     each: SpritesEach,
   ): void {
-    const f = frame === this.lastImage && this.lastFrame ? this.lastFrame : "image" in frame ? frame : this.wholeImage(frame);
+    let frames: readonly Frame[] | undefined;
+    let f: Frame;
+    let mixed = false;
+    if (Array.isArray(frame)) {
+      const all = frame as readonly Frame[];
+      f = all[0] as Frame;
+      if (!f) return;
+      if (each.frame) {
+        frames = all;
+        for (let i = 1; i < all.length && !mixed; i++) mixed = (all[i] as Frame).image !== f.image;
+      }
+    } else {
+      const one = frame as Frame | TextureSource;
+      f = one === this.lastImage && this.lastFrame ? this.lastFrame : "image" in one ? one : this.wholeImage(one);
+    }
     const origin = o.origin;
     const rotation = o.rotation ?? 0;
     const smooth = o.smooth ?? this.smooth;
@@ -315,13 +390,11 @@ export class Draw {
       m,
       positions,
       count,
-      src: f.image,
-      sx: f.x,
-      sy: f.y,
-      sw: f.w,
-      sh: f.h,
-      ox: -(origin ? origin[0] : 0.5) * f.w,
-      oy: -(origin ? origin[1] : 0.5) * f.h,
+      frame: f,
+      originX: origin ? origin[0] : 0.5,
+      originY: origin ? origin[1] : 0.5,
+      frames,
+      mixed,
       scaleX: (o.scaleX ?? 1) * (o.flipX ? -1 : 1),
       scaleY: (o.scaleY ?? 1) * (o.flipY ? -1 : 1),
       rotation,
@@ -336,40 +409,32 @@ export class Draw {
 
   /** tmp = M · T(x, y) · R(rotation) · S(sx, sy) · T(ox, oy) · S(w, h), expanded by hand. Returns the frame. */
   private place(frame: Frame | TextureSource, x: number, y: number, o: SpriteDrawOptions): Frame {
-    // Check the repeat-image cache before `in`: on a DOM image, `in` walks a long prototype chain per call.
-    const f = frame === this.lastImage && this.lastFrame ? this.lastFrame : "image" in frame ? frame : this.wholeImage(frame);
+    const f = this.frameOf(frame);
     const origin = o.origin;
-    const ox = -(origin ? origin[0] : 0.5) * f.w;
-    const oy = -(origin ? origin[1] : 0.5) * f.h;
-    const sx = (o.scaleX ?? 1) * (o.flipX ? -1 : 1);
-    const sy = (o.scaleY ?? 1) * (o.flipY ? -1 : 1);
-    const m = this.m;
-    let a = sx;
-    let b = 0;
-    let c = 0;
-    let d = sy;
-    const r = o.rotation;
-    if (r) {
-      const cos = Math.cos(r);
-      const sin = Math.sin(r);
-      a = cos * sx;
-      b = sin * sx;
-      c = -sin * sy;
-      d = cos * sy;
-    }
-    const lx = a * ox + c * oy + x;
-    const ly = b * ox + d * oy + y;
-    const t = this.tmp;
-    t[0] = (m[0] * a + m[2] * b) * f.w;
-    t[1] = (m[1] * a + m[3] * b) * f.w;
-    t[2] = (m[0] * c + m[2] * d) * f.h;
-    t[3] = (m[1] * c + m[3] * d) * f.h;
-    t[4] = m[0] * lx + m[2] * ly + m[4];
-    t[5] = m[1] * lx + m[3] * ly + m[5];
+    placeAt(
+      this.m,
+      f.w,
+      f.h,
+      x,
+      y,
+      origin ? origin[0] : 0.5,
+      origin ? origin[1] : 0.5,
+      (o.scaleX ?? 1) * (o.flipX ? -1 : 1),
+      (o.scaleY ?? 1) * (o.flipY ? -1 : 1),
+      o.rotation ?? 0,
+      this.tmp,
+    );
     return f;
   }
 
-  private spriteColor(o: SpriteDrawOptions): number {
+  private frameOf(frame: Frame | TextureSource): Frame {
+    // Check the repeat-image cache before `in`: on a DOM image, `in` walks a long prototype chain per call.
+    return frame === this.lastImage && this.lastFrame ? this.lastFrame : "image" in frame ? frame : this.wholeImage(frame);
+  }
+
+  /** @internal */
+
+  spriteColor(o: SpriteDrawOptions): number {
     const tint = o.tint === undefined ? WHITE : toRGBA(o.tint);
     const alpha = o.alpha ?? 1;
     return alpha === 1 && this.alpha === 1 ? tint : this.withAlpha(tint, alpha);
@@ -383,13 +448,13 @@ export class Draw {
       this.bitmapText(text, x, y, font, o);
       return;
     }
-    const entry = this.textCache.get(text, font, this.renderScale, (src) => this.backend.invalidate(src));
+    const entry = this.textCache.get(text, font, this.renderScale, this.backend);
     const ax = o.align === "center" ? 0.5 : o.align === "right" ? 1 : 0;
     const ay = o.baseline === "middle" ? 0.5 : o.baseline === "bottom" ? 1 : 0;
     this.local(x - ax * entry.w, y - ay * entry.h, entry.w, entry.h);
     const color = this.withAlpha(toRGBA(o.color ?? "#ffffff"), o.alpha ?? 1);
     this.quads++;
-    this.backend.quad(this.tmp, entry.canvas, 0, 0, entry.canvas.width, entry.canvas.height, color, 0, true);
+    this.backend.quad(this.tmp, entry.src, entry.sx, entry.sy, entry.sw, entry.sh, color, 0, true);
   }
 
   /**
@@ -399,7 +464,7 @@ export class Draw {
   measure(text: string, font: string | BitmapFont = this.defaultFont()): { w: number; h: number } {
     if (!text) return { w: 0, h: 0 };
     if (typeof font !== "string") return font.measure(text);
-    const entry = this.textCache.get(text, font, this.renderScale, (src) => this.backend.invalidate(src));
+    const entry = this.textCache.get(text, font, this.renderScale, this.backend);
     return { w: entry.w, h: entry.h };
   }
 
@@ -447,20 +512,24 @@ export class Draw {
    */
   into(target: RenderTarget, fn: () => void, clear: Color | null = 0): void {
     const outer = this.target;
-    const outerW = outer ? outer.width : this.viewW;
-    const outerH = outer ? outer.height : this.viewH;
+    const outerW = this.destW;
+    const outerH = this.destH;
     const outerScale = this.renderScale;
     const outerAlpha = this.alpha;
     const outerClips = this.clips.splice(0);
-    if (outerClips.length) this.backend.setClip(null);
     const depth = this.depth;
     this.push();
-    copy(IDENTITY, this.m);
-    this.alpha = 1;
-    this.renderScale = 1;
-    this.target = target;
-    this.backend.setTarget(target, clear === null ? null : toRGBA(clear), target.width, target.height);
+    // Everything from here is undone by the finally, so a target the backend refuses leaves no trace.
     try {
+      if (outerClips.length) this.backend.setClip(null);
+      copy(IDENTITY, this.m);
+      this.mver++;
+      this.alpha = 1;
+      this.renderScale = 1;
+      this.target = target;
+      this.destW = target.width;
+      this.destH = target.height;
+      this.backend.setTarget(target, clear === null ? null : toRGBA(clear), target.width, target.height);
       fn();
     } finally {
       if (this.clips.length) {
@@ -468,6 +537,8 @@ export class Draw {
         this.backend.setClip(null);
       }
       this.target = outer;
+      this.destW = outerW;
+      this.destH = outerH;
       this.backend.setTarget(outer, null, outerW, outerH);
       this.clips.push(...outerClips);
       const clip = outerClips.at(-1);
@@ -514,6 +585,8 @@ export class Draw {
   /** Re-upload a source whose pixels changed (e.g. a canvas you draw into). */
   invalidate(src: TextureSource): void {
     this.backend.invalidate(src);
+    this.frames.delete(src);
+    if (this.lastImage === src) this.lastImage = null;
   }
 
   // ---- frame lifecycle (called by Game) ----------------------------------------------------
@@ -521,21 +594,29 @@ export class Draw {
   /** @internal */
   renderScale = 1;
 
-  /** @internal */
-  begin(clear: Color, width: number, height: number, scale: number): void {
+  /**
+   * Start a frame: clear to `clear` (null draws over what's there: an overlay, a second pass, or a frame another
+   * engine began), at a logical size of `width × height` units with `scale` backing pixels per unit (2 on a 2×
+   * screen, or the canvas's pixel width / `width`). Resets the transform, alpha, blend and clips.
+   */
+  begin(clear: Color | null, width: number, height: number, scale: number): void {
     this.textCache.frame++;
     this.renderScale = scale;
     this.viewW = width;
     this.viewH = height;
+    this.destW = width;
+    this.destH = height;
     this.target = null;
     this.shader = null;
     this.quads = 0;
     this.depth = 0;
     this.clips.length = 0;
     copy(IDENTITY, this.m);
+    this.mver++;
     this.alpha = 1;
-    this.backend.setBlend("normal");
-    this.backend.begin(toRGBA(clear), width, height, scale);
+    this.maskDepth = 0;
+    this.blend("normal");
+    this.backend.begin(clear === null ? null : toRGBA(clear), width, height, scale);
   }
 
   /** @internal Reset transform and blend between scene and afterRender hooks. */
@@ -546,11 +627,12 @@ export class Draw {
       this.backend.setClip(null);
     }
     copy(IDENTITY, this.m);
+    this.mver++;
     this.alpha = 1;
-    this.backend.setBlend("normal");
+    this.blend("normal");
   }
 
-  /** @internal */
+  /** Finish the frame: submits everything drawn since `begin()`. */
   end(): void {
     this.backend.end();
   }
@@ -561,7 +643,7 @@ export class Draw {
     this.backend = disposed(this.backend);
   }
 
-  /** @internal */
+  /** Tell spryte the canvas's backing size changed: call it with `canvas.width, canvas.height` after setting them. */
   resize(w: number, h: number): void {
     this.backingW = w;
     this.backingH = h;
@@ -577,8 +659,15 @@ export class Draw {
 
   // ---- internals ---------------------------------------------------------------------------
 
+  /** @internal */
+
+  blendMode: BlendMode = "normal";
+  /** @internal */
+  maskDepth = 0;
+
   /** tmp = current matrix × (translate(x, y) · scale(w, h)): maps the unit square to the rect. */
-  private local(x: number, y: number, w: number, h: number): void {
+  /** @internal */
+  local(x: number, y: number, w: number, h: number): void {
     const m = this.m;
     const t = this.tmp;
     t[0] = m[0] * w;
@@ -589,12 +678,16 @@ export class Draw {
     t[5] = m[1] * x + m[3] * y + m[5];
   }
 
-  private wholeImage(image: TextureSource): Frame {
+  /** @internal */
+
+  wholeImage(image: TextureSource): Frame {
     // Loops usually draw one image many times in a row; skip the WeakMap for repeats.
     if (image === this.lastImage && this.lastFrame) return this.lastFrame;
     let f = this.frames.get(image);
     if (!f) {
       f = wholeImage(image);
+      // An image still loading is 0×0: remember nothing, so its real size is read once it has loaded.
+      if (f.w === 0 || f.h === 0) return f;
       this.frames.set(image, f);
     }
     this.lastImage = image;
@@ -606,24 +699,28 @@ export class Draw {
     return typeof this.font === "function" ? this.font() : this.font;
   }
 
-  private withAlpha(rgba: number, alpha: number): number {
+  /** @internal */
+
+  withAlpha(rgba: number, alpha: number): number {
     const a = Math.round((rgba & 0xff) * alpha * this.alpha);
     return ((rgba & 0xffffff00) | Math.max(0, Math.min(255, a))) >>> 0;
   }
 
-  private circle64(): HTMLCanvasElement | OffscreenCanvas {
-    if (!this.circleTexture) {
-      const c = makeCanvas(64, 64);
+  private circleTexture(size: 64 | 256 | 1024): HTMLCanvasElement | OffscreenCanvas {
+    const slot = size === 64 ? 0 : size === 256 ? 1 : 2;
+    let c = this.circleTextures[slot];
+    if (!c) {
+      c = makeCanvas(size, size);
       const ctx = c.getContext("2d") as CanvasRenderingContext2D | null;
       if (ctx) {
         ctx.fillStyle = "#fff";
         ctx.beginPath();
-        ctx.arc(32, 32, 31.5, 0, Math.PI * 2);
+        ctx.arc(size / 2, size / 2, size / 2 - 0.5, 0, Math.PI * 2);
         ctx.fill();
       }
-      this.circleTexture = c;
+      this.circleTextures[slot] = c;
     }
-    return this.circleTexture;
+    return c;
   }
 }
 
@@ -639,6 +736,7 @@ function disposed(was: Backend): Backend {
     raw: was.raw,
     begin: fail,
     quad: fail,
+    path: fail,
     quads: fail,
     copies: fail,
     setBlend: fail,
@@ -683,64 +781,174 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
 }
 
 interface TextEntry {
-  canvas: HTMLCanvasElement | OffscreenCanvas;
-  /** The frame it was last drawn in. */
-  frame: number;
+  /** The image holding the rasterised string: an atlas page, or its own canvas. */
+  src: HTMLCanvasElement | OffscreenCanvas;
+  /** Source rect in `src`, in pixels. */
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
   /** Logical size. */
   w: number;
   h: number;
+  /** The atlas page it lives on, or null for its own canvas. */
+  page: AtlasPage | null;
+  /** The frame it was last drawn in. */
+  frame: number;
   used: number;
 }
 
+/** Atlas pages are this many pixels square. */
+const PAGE = 1024;
+
+interface AtlasPage {
+  canvas: HTMLCanvasElement | OffscreenCanvas;
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  /** Shelf packing: the current shelf's top and height, and the next free x on it. */
+  shelfY: number;
+  shelfH: number;
+  x: number;
+  /** The last frame a string on this page was drawn in. */
+  frame: number;
+  keys: string[];
+}
+
+type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
 /**
- * LRU cache of rasterised text (white; tinted at draw time). Holds at least 256 strings, and never evicts one
- * drawn this frame or the last, so a screen with more distinct strings than that doesn't re-rasterise and
- * re-upload all of them every frame.
+ * Cache of rasterised text (white; tinted at draw time).
+ *
+ * On WebGL2, strings are packed into shared atlas pages, and a new string uploads only its own rectangle. Text
+ * that changes every frame (scores, timers, damage numbers) then costs one small upload per new string instead
+ * of a new texture each, and the labels on a page batch into one draw call. A full page is recycled once none
+ * of its strings was drawn this frame or the last; while every page is in use, a new page is added.
+ *
+ * On the Canvas 2D fallback, and for a string too big for a page, each string gets its own canvas, kept in an
+ * LRU of at least 256 strings that never evicts one drawn this frame or the last.
  */
 class TextCache {
   private readonly entries = new Map<string, TextEntry>();
+  private readonly pages: AtlasPage[] = [];
   private clock = 0;
   /** Advanced by `begin()`. */
   frame = 0;
   private limit = 256;
+  private measureCtx: Ctx2D | null = null;
+  private scratch: HTMLCanvasElement | OffscreenCanvas | null = null;
 
-  get(text: string, font: string, scale: number, evict: (src: TextureSource) => void): TextEntry {
+  get(text: string, font: string, scale: number, backend: Backend): TextEntry {
     const key = `${scale}|${font}|${text}`;
     const hit = this.entries.get(key);
     if (hit) {
       hit.used = ++this.clock;
       hit.frame = this.frame;
+      if (hit.page) hit.page.frame = this.frame;
       return hit;
     }
-    const measureCtx = makeCanvas(1, 1).getContext("2d") as CanvasRenderingContext2D | null;
-    if (!measureCtx) throw new Error("draw.text needs a 2D canvas for rasterising text");
-    measureCtx.font = font;
-    const metrics = measureCtx.measureText(text);
+    if (!this.measureCtx) {
+      this.measureCtx = makeCanvas(1, 1).getContext("2d") as Ctx2D | null;
+      if (!this.measureCtx) throw new Error("draw.text needs a 2D canvas for rasterising text");
+    }
+    this.measureCtx.font = font;
+    const metrics = this.measureCtx.measureText(text);
     const ascent = metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent;
     const descent = metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent;
     const w = Math.ceil(metrics.width) + 2;
     const h = Math.ceil(ascent + descent) + 2;
-    const canvas = makeCanvas(Math.ceil(w * scale), Math.ceil(h * scale));
-    const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
-    if (ctx) {
+    const pw = Math.ceil(w * scale);
+    const ph = Math.ceil(h * scale);
+    const draw = (ctx: Ctx2D) => {
       ctx.scale(scale, scale);
       ctx.font = font;
       ctx.fillStyle = "#fff";
       ctx.textBaseline = "alphabetic";
       ctx.fillText(text, 1, 1 + ascent);
-    }
-    const entry = { canvas, w, h, used: ++this.clock, frame: this.frame };
+    };
+    const entry =
+      backend.update && pw + 2 <= PAGE && ph + 2 <= PAGE / 8
+        ? this.pack(key, pw, ph, w, h, draw, backend)
+        : this.own(pw, ph, w, h, draw, backend);
     this.entries.set(key, entry);
-    if (this.entries.size > this.limit) {
+    return entry;
+  }
+
+  /** Rasterise into an atlas page and upload just that rectangle. */
+  private pack(key: string, pw: number, ph: number, w: number, h: number, draw: (ctx: Ctx2D) => void, backend: Backend): TextEntry {
+    const page = this.room(pw, ph);
+    // A pixel of gap around each string, so linear filtering never picks up a neighbour.
+    const sx = page.x + 1;
+    const sy = page.shelfY + 1;
+    page.x += pw + 2;
+    page.keys.push(key);
+    page.frame = this.frame;
+    if (!this.scratch || this.scratch.width < pw || this.scratch.height < ph)
+      this.scratch = makeCanvas(Math.max(pw, 256), Math.max(ph, 64));
+    const sc = this.scratch.getContext("2d") as Ctx2D | null;
+    if (sc) {
+      sc.setTransform(1, 0, 0, 1, 0, 0);
+      sc.clearRect(0, 0, this.scratch.width, this.scratch.height);
+      draw(sc);
+      // The page keeps a copy, so the whole texture can be rebuilt (a lost context, or its first use).
+      page.ctx.clearRect(sx, sy, pw, ph);
+      page.ctx.drawImage(this.scratch, 0, 0, pw, ph, sx, sy, pw, ph);
+      backend.update?.(page.canvas, sx, sy, this.scratch, pw, ph);
+    }
+    return { src: page.canvas, sx, sy, sw: pw, sh: ph, w, h, page, frame: this.frame, used: ++this.clock };
+  }
+
+  /** A page with room for a `pw × ph` string: the current one, a recycled one, or a new one. */
+  private room(pw: number, ph: number): AtlasPage {
+    const current = this.pages[this.pages.length - 1];
+    if (current) {
+      if (current.x + pw + 2 <= PAGE && ph + 2 <= current.shelfH) return current;
+      // Start a new shelf below the current one.
+      const y = current.shelfY + current.shelfH;
+      if (y + ph + 2 <= PAGE) {
+        current.shelfY = y;
+        current.shelfH = ph + 2;
+        current.x = 0;
+        return current;
+      }
+    }
+    // Recycle the least recently drawn page that nothing on screen uses (not drawn this frame or the last).
+    let free: AtlasPage | undefined;
+    for (const p of this.pages) if (p.frame < this.frame - 1 && (!free || p.frame < free.frame)) free = p;
+    if (free) {
+      for (const k of free.keys) this.entries.delete(k);
+      free.keys.length = 0;
+      this.pages.splice(this.pages.indexOf(free), 1);
+    } else {
+      const canvas = makeCanvas(PAGE, PAGE);
+      const ctx = canvas.getContext("2d") as Ctx2D | null;
+      if (!ctx) throw new Error("draw.text needs a 2D canvas for rasterising text");
+      free = { canvas, ctx, shelfY: 0, shelfH: 0, x: 0, frame: this.frame, keys: [] };
+    }
+    free.shelfY = 0;
+    free.shelfH = ph + 2;
+    free.x = 0;
+    // Last in the list is the current page.
+    this.pages.push(free);
+    return free;
+  }
+
+  /** Its own canvas: the Canvas 2D fallback, or a string too big for a page. */
+  private own(pw: number, ph: number, w: number, h: number, draw: (ctx: Ctx2D) => void, backend: Backend): TextEntry {
+    const canvas = makeCanvas(pw, ph);
+    const ctx = canvas.getContext("2d") as Ctx2D | null;
+    if (ctx) draw(ctx);
+    let owned = 1;
+    for (const e of this.entries.values()) if (!e.page) owned++;
+    if (owned > this.limit) {
       // Evict the least recently used quarter, never anything drawn this frame or the last.
-      const stale = [...this.entries].filter(([, e]) => e.frame < this.frame - 1).sort((a, b) => a[1].used - b[1].used);
-      for (const [k, e] of stale.slice(0, Math.max(64, this.entries.size >> 2))) {
+      const stale = [...this.entries].filter(([, e]) => !e.page && e.frame < this.frame - 1).sort((a, b) => a[1].used - b[1].used);
+      const evict = stale.slice(0, Math.max(64, owned >> 2));
+      for (const [k, e] of evict) {
         this.entries.delete(k);
-        evict(e.canvas);
+        backend.invalidate(e.src);
       }
       // Still full of live strings: the screen needs more, so make room for them.
-      this.limit = Math.max(256, this.entries.size * 2);
+      if (owned - evict.length > this.limit) this.limit = Math.max(256, owned * 2);
     }
-    return entry;
+    return { src: canvas, sx: 0, sy: 0, sw: pw, sh: ph, w, h, page: null, frame: this.frame, used: ++this.clock };
   }
 }

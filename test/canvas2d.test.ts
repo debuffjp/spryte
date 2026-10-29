@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canvas2DBackend } from "../src/canvas2d.js";
 import { Draw } from "../src/draw.js";
+import { mask } from "../src/mask.js";
 
 function recordingContext() {
   const calls: { name: string; args: unknown[]; state: { alpha: number; fill: unknown; op: string } }[] = [];
@@ -57,6 +58,19 @@ describe("Canvas2DBackend", () => {
   });
 });
 
+describe("Canvas2DBackend blend modes", () => {
+  it("maps each mode to its composite operation", () => {
+    const { ctx, raw } = recordingContext();
+    const draw = new Draw(new Canvas2DBackend(ctx), false);
+    const ops: string[] = [];
+    for (const mode of ["multiply", "screen", "erase", "normal"] as const) {
+      draw.blend(mode);
+      ops.push(raw.globalCompositeOperation as string);
+    }
+    expect(ops).toEqual(["multiply", "screen", "destination-out", "source-over"]);
+  });
+});
+
 describe("Canvas2DBackend clip", () => {
   it("clips with save/rect/clip and restores before changing", () => {
     const { ctx, calls } = recordingContext();
@@ -65,6 +79,40 @@ describe("Canvas2DBackend clip", () => {
     backend.setClip(null);
     expect(calls.map((c) => c.name)).toEqual(["save", "setTransform", "beginPath", "rect", "clip", "restore"]);
     expect(calls.find((c) => c.name === "rect")?.args).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("Canvas2DBackend offscreen passes", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("a mask inside a clip leaves the screen's save/restore balanced", () => {
+    const { ctx, calls } = recordingContext();
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        constructor(
+          public width: number,
+          public height: number,
+        ) {}
+        getContext() {
+          return recordingContext().ctx;
+        }
+      },
+    );
+    const draw = new Draw(new Canvas2DBackend(ctx), false);
+    draw.resize(100, 100);
+    draw.begin("#000", 100, 100, 1);
+    draw.clip(0, 0, 50, 50, () =>
+      mask(
+        draw,
+        () => draw.rect(0, 0, 10, 10, "#fff"),
+        () => draw.rect(0, 0, 50, 50, "#f00"),
+      ),
+    );
+    draw.end();
+    const saves = calls.filter((c) => c.name === "save").length;
+    const restores = calls.filter((c) => c.name === "restore").length;
+    expect(restores).toBe(saves);
   });
 });
 
