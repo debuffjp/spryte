@@ -29,6 +29,8 @@
       button { font: inherit; font-size: 13px; font-weight: 600; color: var(--text-2); background: var(--soft); border: 0; border-radius: 999px; padding: 5px 13px; cursor: pointer; transition: transform 0.12s; }
       button:hover { transform: translateY(-1px); color: var(--text); }
       button[aria-pressed="true"] { color: var(--ink); background: var(--lime); }
+      .swatch { width: 30px; height: 20px; padding: 0; border-radius: 999px; }
+      .swatch[aria-pressed="true"] { outline: 2px solid var(--lime); outline-offset: 2px; }
       button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
       #caption { padding: 0 20px; color: var(--text); min-height: 1.45em; max-width: 72ch; }
       #stats { padding: 2px 20px 0; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; min-height: 1.45em; }
@@ -48,10 +50,17 @@
     <header>
       <a class="brand" href="https://debuff.jp/spryte/"><img src="https://debuff.jp/spryte/icon.svg" alt="" />spryte</a>
       <h1>flow field</h1>
+      <fieldset class="group" id="modes" aria-label="Mode">
+        <button type="button" data-mode="2d">Flat</button>
+        <button type="button" data-mode="galaxy">Galaxies</button>
+        <button type="button" data-mode="waves">Waves</button>
+        <button type="button" data-mode="river">River</button>
+      </fieldset>
       <fieldset class="group" id="actions" aria-label="Actions">
         <button type="button" id="seed">New field</button>
         <button type="button" id="save">Save PNG</button>
       </fieldset>
+      <fieldset class="group" id="palettes" aria-label="Palette"><span>palette</span></fieldset>
       <fieldset class="group" id="backends" aria-label="Renderer">
         <span>renderer</span>
         <button type="button" data-backend="auto">WebGL2</button>
@@ -62,13 +71,15 @@
         <button type="button" data-count="20000">20k</button>
         <button type="button" data-count="60000">60k</button>
         <button type="button" data-count="150000">150k</button>
+        <button type="button" data-count="400000">400k</button>
+        <button type="button" data-count="1000000">1M</button>
       </fieldset>
     </header>
     <div id="caption">Drag to stir the field. Click to drop a colour. Each particle is one copy in a single sprites() call, its trail a render target that fades a little every frame.</div>
     <div id="stats"></div>
     <div id="stage"></div>
     <footer>
-      <span>Trails: a render target redrawn over itself. Glow: additive blending. Grain: a custom shader (WebGL2 only).</span>
+      <span>Every mode draws all its particles in one sprites() call. Flat adds render-target trails and a grain shader (WebGL2 only).</span>
       <span><a href="https://github.com/debuffjp/debuff/tree/main/packages/spryte/examples/flow">source</a></span>
     </footer>
     <script type="module" src="./main.ts"></script>
