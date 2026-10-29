@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meteorites: a spryte demo</title>
+    <meta name="description" content="31,911 meteorite landings from NASA, every one a dot flying between a world map, a replay over time, a mass histogram and a timeline. Drawn with spryte." />
+    <link rel="icon" href="https://debuff.jp/spryte/icon.svg" />
+    <style>
+      :root {
+        --bg: #0d0f0a;
+        --soft: #1f2617;
+        --text: #e8ecdf;
+        --text-2: #a3ab96;
+        --text-3: #6b7360;
+        --lime: #cffb2d;
+        --sky: #38bdf8;
+        --ink: #11140d;
+      }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text-2); font: 14px/1.45 system-ui, sans-serif; overscroll-behavior: none; }
+      body { display: flex; flex-direction: column; }
+      a { color: var(--text-2); }
+      header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 14px 20px 8px; }
+      .brand { display: flex; gap: 8px; align-items: center; color: var(--text); text-decoration: none; font-weight: 700; }
+      .brand img { width: 24px; height: 24px; }
+      h1 { font-size: 17px; margin: 0; color: var(--text); font-weight: 700; letter-spacing: -0.01em; }
+      .group { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; gap: 4px; align-items: center; }
+      .group span { color: var(--text-3); margin-right: 4px; font-size: 12px; }
+      button { font: inherit; font-size: 13px; font-weight: 600; color: var(--text-2); background: var(--soft); border: 0; border-radius: 999px; padding: 5px 13px; cursor: pointer; transition: transform 0.12s; }
+      button:hover { transform: translateY(-1px); color: var(--text); }
+      button[aria-pressed="true"] { color: var(--ink); background: var(--lime); }
+      button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+      #caption { padding: 0 20px; color: var(--text); min-height: 1.45em; max-width: 72ch; }
+      #stats { padding: 2px 20px 0; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; min-height: 1.45em; }
+      #stage { position: relative; flex: 1; min-height: 0; margin: 8px 20px 0; border-radius: 20px; background: var(--ink); overflow: hidden; touch-action: none; cursor: crosshair; }
+      canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      footer { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 20px 12px; color: var(--text-3); font-size: 12px; }
+      .fell { color: var(--lime); }
+      .found { color: var(--sky); }
+      @media (max-width: 600px) {
+        header { padding: 10px 12px 6px; }
+        #caption, #stats, footer { padding-left: 12px; padding-right: 12px; }
+        #stage { margin: 6px 12px 0; border-radius: 14px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="https://debuff.jp/spryte/"><img src="https://debuff.jp/spryte/icon.svg" alt="" />spryte</a>
+      <h1 id="title">meteorites</h1>
+      <fieldset class="group" id="views" aria-label="View">
+        <button type="button" data-view="map">Map</button>
+        <button type="button" data-view="replay">Over time</button>
+        <button type="button" data-view="mass">Mass</button>
+        <button type="button" data-view="year">Year</button>
+      </fieldset>
+      <fieldset class="group" id="backends" aria-label="Renderer">
+        <span>renderer</span>
+        <button type="button" data-backend="auto">WebGL2</button>
+        <button type="button" data-backend="2d">Canvas 2D</button>
+      </fieldset>
+      <fieldset class="group" id="copies" aria-label="Copies of the data">
+        <span>points</span>
+        <button type="button" data-copies="1">x1</button>
+        <button type="button" data-copies="4">x4</button>
+        <button type="button" data-copies="8">x8</button>
+      </fieldset>
+    </header>
+    <div id="caption"></div>
+    <div id="stats"></div>
+    <div id="stage"></div>
+    <footer>
+      <span><span class="fell">●</span> seen falling · <span class="found">●</span> found later · move or drag to aim the lens, scroll to resize, keys 1-4 switch views</span>
+      <span>Data: NASA Open Data Portal, from The Meteoritical Society · <a href="https://github.com/debuffjp/debuff/tree/main/packages/spryte/examples/lens">source</a></span>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
