@@ -51,6 +51,7 @@
     "test": "vitest run",
     "example": "vite examples/minimal",
     "example:lens": "vite examples/lens",
+    "example:flow": "vite examples/flow",
     "example:phaser": "vite examples/phaser",
     "test:phaser": "node examples/phaser/check.mjs",
     "example:pixi": "vite examples/pixi",
