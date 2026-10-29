@@ -152,6 +152,23 @@ void main() {
   outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
 }`;
 
+/** The fragment stage around a custom `effect()` when it runs on per-copy sprites: one texture, flash uniform. */
+const EACH_FRAG_HEADER = `#version 300 es
+precision mediump float;
+in highp vec2 v_uv;
+in vec4 v_color;
+uniform sampler2D u_tex;
+uniform float u_flash;
+out vec4 outColor;
+vec4 source(vec2 uv) { return texture(u_tex, uv); }
+`;
+
+const EACH_FRAG_MAIN = `
+void main() {
+  vec4 t = effect(v_color, v_uv);
+  outColor = vec4(mix(t.rgb, vec3(t.a), u_flash), t.a);
+}`;
+
 /**
  * Tessellated shapes (`polygon`, `polyline`, `roundRect`, `ring`) as indexed triangles with edge coverage.
  * Sprites drawn while shapes are pending join the same batch as textured quads, so UI that alternates panels
@@ -181,11 +198,19 @@ interface ShapePipeline extends ProgramInfo {
   indices: WebGLBuffer;
 }
 
-interface EachPipeline extends ProgramInfo {
+/** A per-copy program: the built-in one, or a custom shader's effect compiled against it. */
+interface EachProgram extends ProgramInfo {
+  at: Record<"linear" | "mt" | "origin" | "scale" | "rot" | "color" | "flash" | "snap", WebGLUniformLocation | null>;
+}
+
+interface EachPipeline extends EachProgram {
   vao: WebGLVertexArrayObject;
   /** Position, scale, rotation, colour and frame (uv + size) buffers (attribute locations 1–4, 5–6). */
   buffers: WebGLBuffer[];
-  at: Record<"linear" | "mt" | "origin" | "scale" | "rot" | "color" | "flash" | "snap", WebGLUniformLocation | null>;
+}
+
+interface EachCustom extends EachProgram {
+  locations: Map<string, WebGLUniformLocation | null>;
 }
 
 interface CopyPipeline extends ProgramInfo {
@@ -223,6 +248,27 @@ void main() {
 }`;
 
 const FRAG = `${FRAG_HEADER}vec4 effect(vec4 color, vec2 uv) { return source(uv) * color; }${FRAG_MAIN}`;
+
+/** Uniform locations of a per-copy program (`EACH_VERT` plus any fragment stage). */
+function eachProgram(gl: WebGL2RenderingContext, program: WebGLProgram): EachProgram {
+  const u = (name: string) => gl.getUniformLocation(program, name);
+  return {
+    program,
+    view: u("u_view"),
+    w: -1,
+    h: -1,
+    at: {
+      linear: u("u_linear"),
+      mt: u("u_mt"),
+      origin: u("u_origin"),
+      scale: u("u_scale"),
+      rot: u("u_rot"),
+      color: u("u_color"),
+      flash: u("u_flash"),
+      snap: u("u_snap"),
+    },
+  };
+}
 
 /** A linked program and the view size last uploaded to it, so `u_view` is only sent when it changes. */
 interface ProgramInfo {
@@ -291,6 +337,8 @@ export class WebGL2Backend implements Backend {
   protected active!: BatchProgram;
   private shader: Shader | null = null;
   private readonly customs = new Map<Shader, CustomProgram>();
+  /** Custom shaders compiled for per-copy sprites, so effects keep the instanced path. */
+  private readonly eachCustoms = new Map<Shader, EachCustom>();
   protected vao!: WebGLVertexArrayObject;
   private quadBuffer!: WebGLBuffer;
   private copyPipe!: CopyPipeline;
@@ -322,6 +370,7 @@ export class WebGL2Backend implements Backend {
     // Render targets come back blank. Custom shaders recompile on next use.
     const shader = this.shader;
     this.customs.clear();
+    this.eachCustoms.clear();
     this.textures.clear();
     this.targets.clear();
     this.target = null;
@@ -691,22 +740,6 @@ export class WebGL2Backend implements Backend {
   ): void {
     if (this.lost || count <= 0) return;
     if (src === this.target) throw new Error("spryte: can't draw a render target into itself");
-    if (this.shader) {
-      // The copy pipeline has no custom effects: draw each copy as a quad through the active shader.
-      const q: Matrix = [t[0], t[1], t[2], t[3], 0, 0];
-      for (let i = 0; i < count; i++) {
-        const x = positions[i * 2] as number;
-        const y = positions[i * 2 + 1] as number;
-        q[4] = t[4] + m[0] * x + m[2] * y;
-        q[5] = t[5] + m[1] * x + m[3] * y;
-        if (snap) {
-          q[4] = Math.round(q[4]);
-          q[5] = Math.round(q[5]);
-        }
-        this.quad(q, src, sx, sy, sw, sh, color, flash, smooth);
-      }
-      return;
-    }
     // Draw order: everything queued so far goes first.
     this.flush();
     const gl = this.gl;
@@ -745,8 +778,8 @@ export class WebGL2Backend implements Backend {
 
   copies(c: CopySpec): void {
     if (this.lost || c.count <= 0) return;
-    if (this.shader || c.mixed) {
-      // Custom effects run in the sprite program, and frames across images need its texture units: one quad per copy.
+    if (c.mixed) {
+      // Frames across images need the sprite program's texture units: one quad per copy.
       const q: Matrix = [1, 0, 0, 1, 0, 0];
       for (let i = 0; i < c.count; i++) {
         const f = frameAt(c, i);
@@ -764,10 +797,13 @@ export class WebGL2Backend implements Backend {
     this.lastSrc = src;
     this.last = tex;
     const p = this.each;
-    const at = p.at;
-    gl.useProgram(p.program);
+    const shader = this.shader;
+    const prog: EachProgram = shader ? this.eachCustom(shader) : p;
+    const at = prog.at;
+    gl.useProgram(prog.program);
     gl.bindVertexArray(p.vao);
-    this.syncView(p);
+    this.syncView(prog);
+    if (shader) this.syncUniforms(shader, prog as EachCustom);
     const m = c.m;
     gl.uniform4f(at.linear, m[0], m[1], m[2], m[3]);
     gl.uniform2f(at.mt, m[4], m[5]);
@@ -782,24 +818,43 @@ export class WebGL2Backend implements Backend {
     gl.bindTexture(gl.TEXTURE_2D, tex.tex);
     gl.bindSampler(0, c.smooth ? this.linear : this.nearest);
     const n = c.count;
-    this.attribute(1, p.buffers[0] as WebGLBuffer, c.positions, n * 2, "staging");
-    if (c.each.scale) this.attribute(2, p.buffers[1] as WebGLBuffer, c.each.scale, n, "stagingScale");
-    else {
-      gl.disableVertexAttribArray(2);
-      gl.vertexAttrib1f(2, 1);
+    const e = c.each;
+    // Pointers are set on every call: a field can be its own array, an offset into interleaved records, or absent.
+    const bytes = c.stride * 4;
+    if (e.stride) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[0] as WebGLBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, c.positions as Float32Array, gl.STREAM_DRAW, 0, n * c.stride);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, bytes, c.offset * 4);
+      gl.enableVertexAttribArray(1);
+    } else this.attribute(1, 2, p.buffers[0] as WebGLBuffer, c.positions, n * 2, "staging");
+    for (const [loc, field, rest, staging] of [
+      [2, e.scale, 1, "stagingScale"],
+      [3, e.rotation, 0, "stagingRot"],
+    ] as const) {
+      if (field === undefined) {
+        gl.disableVertexAttribArray(loc);
+        gl.vertexAttrib1f(loc, rest);
+      } else if (typeof field === "number") {
+        gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[0] as WebGLBuffer);
+        gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, bytes, field * 4);
+        gl.enableVertexAttribArray(loc);
+      } else this.attribute(loc, 1, p.buffers[loc - 1] as WebGLBuffer, field, n, staging);
     }
-    if (c.each.rotation) this.attribute(3, p.buffers[2] as WebGLBuffer, c.each.rotation, n, "stagingRot");
-    else {
-      gl.disableVertexAttribArray(3);
-      gl.vertexAttrib1f(3, 0);
-    }
-    if (c.each.color) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[3] as WebGLBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, c.each.color, gl.STREAM_DRAW, 0, n);
-      gl.enableVertexAttribArray(4);
-    } else {
+    const color = e.color;
+    if (color === undefined) {
       gl.disableVertexAttribArray(4);
       gl.vertexAttribI4ui(4, 0xffffffff, 0, 0, 0);
+    } else {
+      if (typeof color === "number") {
+        // The record's bits at that offset are read as the packed colour, straight from the same upload.
+        gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[0] as WebGLBuffer);
+        gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, bytes, color * 4);
+      } else {
+        gl.bindBuffer(gl.ARRAY_BUFFER, p.buffers[3] as WebGLBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, color, gl.STREAM_DRAW, 0, n);
+        gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
+      }
+      gl.enableVertexAttribArray(4);
     }
     if (c.frames) {
       if (this.stagingFrame.length < n * 6) this.stagingFrame = new Float32Array(n * 6);
@@ -834,6 +889,7 @@ export class WebGL2Backend implements Backend {
   /** Upload one float attribute: a Float32Array as is, anything else through a reused staging array. */
   private attribute(
     loc: number,
+    size: number,
     buffer: WebGLBuffer,
     data: ArrayLike<number>,
     length: number,
@@ -849,6 +905,7 @@ export class WebGL2Backend implements Backend {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, out, gl.STREAM_DRAW, 0, length);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(loc);
   }
 
@@ -922,6 +979,7 @@ export class WebGL2Backend implements Backend {
       gl.deleteVertexArray(this.vao);
       gl.deleteProgram(this.main.program);
       for (const custom of this.customs.values()) gl.deleteProgram(custom.program);
+      for (const custom of this.eachCustoms.values()) gl.deleteProgram(custom.program);
       for (const { fbo } of this.targets.values()) gl.deleteFramebuffer(fbo);
       gl.deleteProgram(this.copyPipe.program);
       gl.deleteVertexArray(this.copyPipe.vao);
@@ -939,6 +997,7 @@ export class WebGL2Backend implements Backend {
     this.textures.clear();
     this.targets.clear();
     this.customs.clear();
+    this.eachCustoms.clear();
     this.lastSrc = null;
     this.last = undefined;
   }
@@ -1068,25 +1127,21 @@ export class WebGL2Backend implements Backend {
     gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 24, 0);
     gl.vertexAttribPointer(6, 2, gl.FLOAT, false, 24, 16);
     gl.vertexAttribDivisor(6, 1);
-    const u = (name: string) => gl.getUniformLocation(program, name);
-    return {
-      program,
-      vao,
-      buffers,
-      view: u("u_view"),
-      w: -1,
-      h: -1,
-      at: {
-        linear: u("u_linear"),
-        mt: u("u_mt"),
-        origin: u("u_origin"),
-        scale: u("u_scale"),
-        rot: u("u_rot"),
-        color: u("u_color"),
-        flash: u("u_flash"),
-        snap: u("u_snap"),
-      },
-    };
+    return { ...eachProgram(gl, program), vao, buffers };
+  }
+
+  /** A custom shader's effect compiled against the per-copy vertex stage, on first use. */
+  private eachCustom(shader: Shader): EachCustom {
+    let p = this.eachCustoms.get(shader);
+    if (p) return p;
+    const gl = this.gl;
+    // #line makes compile errors point at lines in the user's source.
+    const program = link(gl, EACH_VERT, `${EACH_FRAG_HEADER}#line 1\n${shader.source}\n${EACH_FRAG_MAIN}`, "custom shader");
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, "u_tex"), 0);
+    p = { ...eachProgram(gl, program), locations: new Map() };
+    this.eachCustoms.set(shader, p);
+    return p;
   }
 
   private copyPipeline(quad: WebGLBuffer): CopyPipeline {
@@ -1247,7 +1302,7 @@ export class WebGL2Backend implements Backend {
     p.h = this.viewH;
   }
 
-  private syncUniforms(shader: Shader, p: CustomProgram): void {
+  private syncUniforms(shader: Shader, p: { program: WebGLProgram; locations: Map<string, WebGLUniformLocation | null> }): void {
     const gl = this.gl;
     for (const [name, value] of shader.uniforms) {
       let loc = p.locations.get(name);

@@ -1,19 +1,38 @@
 import type { Matrix } from "./backend.js";
 import type { Frame } from "./draw.js";
 
-/** Optional per-copy values for `draw.sprites`. Each array has one entry per copy. */
+/**
+ * Optional per-copy values for `draw.sprites`. Each array has one entry per copy.
+ *
+ * Interleaved data: set `stride` and `positions` becomes one record of `stride` floats per copy (a
+ * `Float32Array`, which may view a `SharedArrayBuffer`). The fields then take offsets into the record instead
+ * of arrays, and the record goes to the GPU as is, with no per-copy work:
+ *
+ * ```ts
+ * // [x, y, scale, colour bits] per copy; write colours through a Uint32Array view of the same buffer.
+ * draw.sprites(dot, data, n, {}, { stride: 4, scale: 2, color: 3 });
+ * ```
+ */
 export interface SpritesEach {
-  /** Uniform scale per copy, multiplied with `scaleX`/`scaleY`. */
-  scale?: ArrayLike<number>;
-  /** Radians per copy, added to `rotation`. */
-  rotation?: ArrayLike<number>;
-  /** `0xRRGGBBAA` per copy, multiplied with `tint` and `alpha`. A `Uint32Array`, uploaded as is. */
-  color?: Uint32Array;
+  /** Floats per copy in `positions`, for interleaved data. Without it, `positions` is x, y pairs. */
+  stride?: number;
+  /** With `stride`: offset of x in each record (y follows). Default 0. */
+  position?: number;
+  /** Uniform scale per copy, multiplied with `scaleX`/`scaleY`. With `stride`, an offset into each record. */
+  scale?: ArrayLike<number> | number;
+  /** Radians per copy, added to `rotation`. With `stride`, an offset into each record. */
+  rotation?: ArrayLike<number> | number;
+  /**
+   * `0xRRGGBBAA` per copy, multiplied with `tint` and `alpha`. A `Uint32Array`, uploaded as is. With `stride`, an
+   * offset into each record whose bits are read as a `Uint32` (write it through a `Uint32Array` on the same buffer).
+   */
+  color?: Uint32Array | number;
   /**
    * Frame per copy: an index into the `Frame[]` passed as `draw.sprites`' first argument (an index past the
    * end throws). Frames on one image stay one draw call; frames across images draw one quad per copy.
+   * With `stride`, an offset into each record.
    */
-  frame?: ArrayLike<number>;
+  frame?: ArrayLike<number> | number;
 }
 
 /**
@@ -44,15 +63,26 @@ export interface CopySpec {
   /** Pixel art under a rotation-free transform: copies whose own rotation is zero snap to whole pixels. */
   snap: boolean;
   each: SpritesEach;
+  /** Floats per copy in `positions` (2 unless `each.stride`) and the offset of x in each. */
+  stride: number;
+  offset: number;
+  /** `positions`' bits as Uint32, when `each.color` is an offset into interleaved records. */
+  bits: Uint32Array | undefined;
+}
+
+/** Copy `i`'s value of a per-copy field: an array entry, or a float at that offset in its interleaved record. */
+export function valueAt(c: CopySpec, field: ArrayLike<number> | number, i: number): number {
+  return (typeof field === "number" ? c.positions[i * c.stride + field] : field[i]) as number;
 }
 
 /** Copy `i`'s frame: the shared one, or its entry in `frames`. */
 export function frameAt(c: CopySpec, i: number): Frame {
   const frames = c.frames;
   const idx = c.each.frame;
-  if (!frames || !idx) return c.frame;
-  const f = frames[idx[i] as number];
-  if (!f) throw new RangeError(`draw.sprites: each.frame[${i}] is ${idx[i]}, but ${frames.length} frames were passed`);
+  if (!frames || idx === undefined) return c.frame;
+  const k = valueAt(c, idx, i);
+  const f = frames[k];
+  if (!f) throw new RangeError(`draw.sprites: each.frame[${i}] is ${k}, but ${frames.length} frames were passed`);
   return f;
 }
 
@@ -102,26 +132,22 @@ export function placeAt(
  * Returns the colour; writes the matrix into `out`.
  */
 export function copyAt(c: CopySpec, i: number, out: Matrix, f: Frame): number {
-  const k = c.each.scale ? (c.each.scale[i] as number) : 1;
-  const r = c.rotation + (c.each.rotation ? (c.each.rotation[i] as number) : 0);
-  placeAt(
-    c.m,
-    f.w,
-    f.h,
-    c.positions[i * 2] as number,
-    c.positions[i * 2 + 1] as number,
-    c.originX,
-    c.originY,
-    c.scaleX * k,
-    c.scaleY * k,
-    r,
-    out,
-  );
+  const e = c.each;
+  const k = e.scale === undefined ? 1 : valueAt(c, e.scale, i);
+  const r = c.rotation + (e.rotation === undefined ? 0 : valueAt(c, e.rotation, i));
+  const p = i * c.stride + c.offset;
+  placeAt(c.m, f.w, f.h, c.positions[p] as number, c.positions[p + 1] as number, c.originX, c.originY, c.scaleX * k, c.scaleY * k, r, out);
   if (c.snap && !r) {
     out[4] = Math.round(out[4]);
     out[5] = Math.round(out[5]);
   }
-  const each = c.each.color ? (c.each.color[i] as number) : 0xffffffff;
+  const color = e.color;
+  const each =
+    color === undefined
+      ? 0xffffffff
+      : typeof color === "number"
+        ? ((c.bits as Uint32Array)[i * c.stride + color] as number)
+        : (color[i] as number);
   return each === 0xffffffff ? c.color : multiply(c.color, each);
 }
 

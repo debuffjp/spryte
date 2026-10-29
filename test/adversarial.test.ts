@@ -129,6 +129,27 @@ describe("adversarial: hostile sprites() counts", () => {
     const upload = calls.find((c) => c.name === "bufferData" && c.args[1] === color);
     expect(upload?.args[4]).toBeLessThanOrEqual(color.length);
   });
+
+  it("interleaved records: a partial last record is not drawn or uploaded", () => {
+    const { gl, calls } = fakeGL();
+    const draw = new Draw(new WebGL2Backend(gl), false);
+    draw.begin("#000", 100, 50, 1);
+    // stride 4 with colour at offset 3: 2 whole records and one that stops before its colour.
+    const data = new Float32Array(4 * 2 + 3);
+    draw.sprites(image(), data, 99, {}, { stride: 4, color: 3 });
+    draw.end();
+    expect(draw.quads).toBe(2);
+    const upload = calls.find((c) => c.name === "bufferData" && c.args[1] === data);
+    expect(upload?.args[4]).toBe(8);
+  });
+
+  it("interleaved records need a Float32Array, and offsets need each.stride", () => {
+    const { gl } = fakeGL();
+    const draw = new Draw(new WebGL2Backend(gl), false);
+    draw.begin("#000", 100, 50, 1);
+    expect(() => draw.sprites(image(), [0, 0, 1, 0, 0, 1], 2, {}, { stride: 3, scale: 2 })).toThrow(TypeError);
+    expect(() => draw.sprites(image(), new Float32Array(4), 2, {}, { scale: 2 })).toThrow(/each.stride/);
+  });
 });
 
 describe("adversarial: lifecycle", () => {

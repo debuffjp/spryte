@@ -223,6 +223,82 @@ for (const backend of ["webgl2", "2d"] as const) {
     }
 }
 
+// Interleaved records (each.stride): must match the same values passed as separate arrays, on both backends.
+{
+  const n = 20;
+  const frames = [
+    { image: img, x: 0, y: 0, w: 8, h: 6 },
+    { image: img, x: 1, y: 1, w: 3, h: 2 },
+  ];
+  const scale = Float32Array.from({ length: n }, (_, i) => 0.5 + (i % 4) * 0.5);
+  const rotation = Float32Array.from({ length: n }, (_, i) => (i % 3) * 0.4);
+  const color = Uint32Array.from({ length: n }, (_, i) => [0xffffffff, 0xff8080ff, 0x80ff80c0, 0x8080ff80][i % 4] as number);
+  const frame = Float32Array.from({ length: n }, (_, i) => i % 2);
+  // [pad, x, y, scale, rotation, colour bits, frame, pad]: offsets that don't start at 0 and a stride wider than used.
+  const stride = 8;
+  const data = new Float32Array(n * stride);
+  const bits = new Uint32Array(data.buffer);
+  for (let i = 0; i < n; i++) {
+    const o = i * stride;
+    data[o] = -1;
+    data[o + 1] = pos[i * 2] as number;
+    data[o + 2] = pos[i * 2 + 1] as number;
+    data[o + 3] = scale[i] as number;
+    data[o + 4] = rotation[i] as number;
+    bits[o + 5] = color[i] as number;
+    data[o + 6] = frame[i] as number;
+    data[o + 7] = -1;
+  }
+  for (const backend of ["webgl2", "2d"] as const) {
+    const plain = await render((draw) => draw.sprites(img, pos, n), backend);
+    const plainStrided = await render((draw) => draw.sprites(img, data, n, {}, { stride, position: 1 }), backend);
+    record(`sprites(each.stride) == x, y pairs: position only (${backend})`, plain, plainStrided);
+    const arrays = await render((draw) => draw.sprites(frames, pos, n, {}, { scale, rotation, color, frame }), backend);
+    const strided = await render(
+      (draw) => draw.sprites(frames, data, n, {}, { stride, position: 1, scale: 3, rotation: 4, color: 5, frame: 6 }),
+      backend,
+    );
+    record(`sprites(each.stride) == separate arrays: scale, rotation, colour, frame (${backend})`, arrays, strided);
+  }
+}
+
+// A custom shader on sprites() keeps the instanced path and must match the same shader on a sprite() loop.
+{
+  const n = 20;
+  const scale = Float32Array.from({ length: n }, (_, i) => 1 + (i % 3) * 0.5);
+  const color = Uint32Array.from({ length: n }, (_, i) => [0xffffffff, 0xff8080ff, 0x80ff80c0][i % 3] as number);
+  const hex = (c: number) => `#${c.toString(16).padStart(8, "0")}`;
+  const swap = `vec4 effect(vec4 color, vec2 uv) { vec4 t = source(uv) * color; return vec4(t.b, t.r, t.g, t.a); }`;
+  const loop = await render((draw) => {
+    const s = draw.createShader(swap);
+    draw.withShader(s, () => {
+      for (let i = 0; i < n; i++)
+        draw.sprite(img, pos[i * 2] as number, pos[i * 2 + 1] as number, {
+          scaleX: scale[i] as number,
+          scaleY: scale[i] as number,
+          tint: hex(color[i] as number),
+          flash: 0.25,
+        });
+    });
+  });
+  const bulk = await render((draw) => {
+    const s = draw.createShader(swap);
+    draw.withShader(s, () => draw.sprites(img, pos, n, { flash: 0.25 }, { scale, color }));
+  });
+  record("withShader + sprites(each) == withShader + sprite() loop (webgl2)", loop, bulk);
+  const plainLoop = await render((draw) => {
+    const s = draw.createShader(swap);
+    draw.withShader(s, () => {
+      for (let i = 0; i < n; i++) draw.sprite(img, pos[i * 2] as number, pos[i * 2 + 1] as number);
+    });
+  });
+  const plainBulk = await render((draw) => {
+    const s = draw.createShader(swap);
+    draw.withShader(s, () => draw.sprites(img, pos, n));
+  });
+  record("withShader + sprites() == withShader + sprite() loop (webgl2)", plainLoop, plainBulk);
+}
+
 // Custom shaders.
 const pixelAt = (px: Uint8Array, x: number, y: number) => Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 4));
 const check = (name: string, pass: boolean, detail: string) =>

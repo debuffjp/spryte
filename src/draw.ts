@@ -43,6 +43,7 @@ export interface TextDrawOptions {
 }
 
 const NO_OPTIONS: SpriteDrawOptions = Object.freeze({});
+const NO_EACH: SpritesEach = Object.freeze({});
 const WHITE = 0xffffffff;
 
 /**
@@ -338,16 +339,26 @@ export class Draw {
     each?: SpritesEach,
   ): void {
     // Never read past the arrays: GL would reject the whole upload and draw nothing.
-    count = Math.min(Math.floor(count) || 0, positions.length >> 1);
-    if (each) {
-      if (each.scale) count = Math.min(count, each.scale.length);
-      if (each.rotation) count = Math.min(count, each.rotation.length);
-      if (each.color) count = Math.min(count, each.color.length);
-      if (each.frame) count = Math.min(count, each.frame.length);
+    const stride = each?.stride;
+    if (stride) {
+      // Interleaved records are uploaded as is (and colour bits read through a view), so they must be floats.
+      if (!(positions instanceof Float32Array)) throw new TypeError("draw.sprites: with each.stride, positions must be a Float32Array");
+      // Every offset used must fit inside the last record.
+      const e = each as SpritesEach;
+      let last = (e.position ?? 0) + 1;
+      for (const field of [e.scale, e.rotation, e.color, e.frame]) if (typeof field === "number") last = Math.max(last, field);
+      count = Math.min(Math.floor(count) || 0, Math.floor((positions.length - last - 1) / stride) + 1);
+    } else count = Math.min(Math.floor(count) || 0, positions.length >> 1);
+    if (each && !stride) {
+      for (const field of [each.scale, each.rotation, each.color, each.frame]) {
+        if (typeof field === "number") throw new TypeError("draw.sprites: offsets in each need each.stride");
+        if (field !== undefined) count = Math.min(count, field.length);
+      }
     }
     if (count <= 0) return;
-    if (each && (each.scale || each.rotation || each.color || each.frame)) {
-      this.spritesEach(frame, positions, count, o, each);
+    // Under a custom shader, the per-copy program runs the effect: route plain copies through it too.
+    if (stride || this.shader || (each && (each.scale || each.rotation || each.color || each.frame))) {
+      this.spritesEach(frame, positions, count, o, each ?? NO_EACH);
       return;
     }
     const f = this.place(Array.isArray(frame) ? (frame[0] as Frame) : (frame as Frame | TextureSource), 0, 0, o);
@@ -373,7 +384,7 @@ export class Draw {
       const all = frame as readonly Frame[];
       f = all[0] as Frame;
       if (!f) return;
-      if (each.frame) {
+      if (each.frame !== undefined) {
         frames = all;
         for (let i = 1; i < all.length && !mixed; i++) mixed = (all[i] as Frame).image !== f.image;
       }
@@ -404,6 +415,12 @@ export class Draw {
       // Like sprite(): per copy, whole pixels when that copy doesn't rotate.
       snap: !smooth && m[1] === 0 && m[2] === 0,
       each,
+      stride: each.stride || 2,
+      offset: each.stride ? (each.position ?? 0) : 0,
+      bits:
+        typeof each.color === "number"
+          ? new Uint32Array((positions as Float32Array).buffer, (positions as Float32Array).byteOffset)
+          : undefined,
     });
   }
 
