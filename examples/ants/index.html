@@ -37,6 +37,8 @@
       .food { color: #fbbf24; }
       .home { color: #38bdf8; }
       .trail { color: var(--lime); }
+      .ant { color: #d9dccf; }
+      .wall { color: #5a634c; }
       @media (max-width: 600px) {
         header { padding: 10px 12px 6px; }
         #caption, #stats, footer { padding-left: 12px; padding-right: 12px; }
@@ -72,8 +74,13 @@
     <div id="stats"></div>
     <div id="stage"></div>
     <footer>
+<<<<<<< HEAD
       <span><span class="home">■</span> scent toward home · <span class="trail">■</span> scent toward food · <span class="food">■</span> food</span>
+      <span>More simulations: <a href="../flock/">flock</a> · <a href="../hemoglobin/">hemoglobin</a> · <a href="../ribosome/">ribosome</a> · <a href="../jupiter/">jupiter</a></span>
+=======
+      <span><span class="ant">●</span> searching · <span class="food">●</span> carrying food · <span class="trail">■</span> trail to food · <span class="home">■</span> trail home · <span class="food">■</span> food · <span class="wall">■</span> wall</span>
       <a href="../flock/">Also: a flock to chase</a>
+>>>>>>> a81d4f4 (spryte ants demo: clearer trails, legend, food left, brush cursor, cheaper sensing)
       <a href="https://github.com/debuffjp/debuff/tree/main/packages/spryte/examples/ants">source</a>
     </footer>
     <script type="module" src="./main.ts"></script>

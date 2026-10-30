@@ -2,7 +2,7 @@
 // heading out lay "home" scent, ants carrying food lay "food" scent, and each follows the other kind.
 // Scent fades, so the shortest routes are the ones refreshed most often and the trails straighten out.
 // The fields are one small image redrawn each frame; the ants are one sprites() call.
-import { createRenderer, type Draw } from "spryte";
+import { createRenderer, type Draw, ring } from "spryte";
 
 const CAP = 40_000;
 const CELL = 4; // px per scent cell
@@ -37,6 +37,10 @@ let field: OffscreenCanvas;
 let pixels: ImageData;
 let nest = { x: 0, y: 0 };
 let delivered = 0;
+let foodLeft = 0;
+let dirty = true; // the field needs repainting even while paused
+const hover = { x: 0, y: 0, on: false };
+const TOOL_COLOR = { food: "#fbbf24", wall: "#a3ab96", erase: "#ffffff88" };
 
 // A 5x3 ant, made at runtime so the demo has no assets.
 const antTex = new OffscreenCanvas(5, 3);
@@ -85,9 +89,11 @@ function paint(x: number, y: number, r: number, what: "food" | "wall" | "erase")
       if (Math.hypot(cx * CELL - nest.x, cy * CELL - nest.y) < NEST_R + 6) continue;
       const k = cy * cols + cx;
       wall[k] = what === "wall" ? 1 : 0;
+      foodLeft += (what === "food" ? PILE : 0) - pile[k];
       pile[k] = what === "food" ? PILE : 0;
       if (what !== "erase") home[k] = food[k] = 0;
     }
+  dirty = true;
 }
 
 function reset(): void {
@@ -103,6 +109,7 @@ function reset(): void {
   pixels = new ImageData(cols, rows);
   nest = { x: w * 0.5, y: h * 0.55 };
   delivered = 0;
+  foodLeft = 0;
   // Three piles to start: near, far and behind a wall, so there's a detour to find.
   paint(w * 0.22, h * 0.3, 22, "food");
   paint(w * 0.82, h * 0.25, 26, "food");
@@ -148,8 +155,11 @@ document.getElementById("reset")?.addEventListener("click", reset);
 
 let drawing = false;
 function brush(e: PointerEvent): void {
-  if (!drawing) return;
   const r = stage.getBoundingClientRect();
+  hover.x = e.clientX - r.left;
+  hover.y = e.clientY - r.top;
+  hover.on = e.pointerType === "mouse" || drawing;
+  if (!drawing) return;
   paint(e.clientX - r.left, e.clientY - r.top, tool === "food" ? 14 : 8, tool);
 }
 stage.addEventListener("pointerdown", (e) => {
@@ -158,8 +168,12 @@ stage.addEventListener("pointerdown", (e) => {
   brush(e);
 });
 stage.addEventListener("pointermove", brush);
-stage.addEventListener("pointerup", () => {
+stage.addEventListener("pointerup", (e) => {
   drawing = false;
+  if (e.pointerType !== "mouse") hover.on = false;
+});
+stage.addEventListener("pointerleave", () => {
+  hover.on = false;
 });
 
 function at(f: Float32Array, x: number, y: number): number {
@@ -179,16 +193,30 @@ function steer(a: number, target: number, max: number): number {
   return a + Math.max(-max, Math.min(max, d));
 }
 
-/** Smell over a small patch: four samples around a point, so one stray cell doesn't decide the way. */
-function patch(f: Float32Array, x: number, y: number): number {
-  return at(f, x - 3, y) + at(f, x + 3, y) + at(f, x, y - 3) + at(f, x, y + 3);
+const SENSE_COS = Math.cos(SENSE_ANGLE);
+const SENSE_SIN = Math.sin(SENSE_ANGLE);
+
+/** Smell over a small patch: two samples across the ant's path, so one stray cell doesn't decide the way. */
+function patch(f: Float32Array, x: number, y: number, px: number, py: number): number {
+  return at(f, x + px, y + py) + at(f, x - px, y - py);
 }
 
-/** Turns toward whichever of left, ahead and right smells strongest of `f`. */
+/**
+ * Turns toward whichever of left, ahead and right smells strongest of `f`. The side sensors come from
+ * rotating the heading vector by a fixed angle, so there's one cos and sin per ant instead of six.
+ */
 function follow(f: Float32Array, x: number, y: number, a: number, max: number): number {
-  const left = patch(f, x + Math.cos(a - SENSE_ANGLE) * SENSE, y + Math.sin(a - SENSE_ANGLE) * SENSE);
-  const ahead = patch(f, x + Math.cos(a) * SENSE, y + Math.sin(a) * SENSE);
-  const right = patch(f, x + Math.cos(a + SENSE_ANGLE) * SENSE, y + Math.sin(a + SENSE_ANGLE) * SENSE);
+  const c = Math.cos(a);
+  const sn = Math.sin(a);
+  const px = -sn * 3; // across the path
+  const py = c * 3;
+  const lc = c * SENSE_COS + sn * SENSE_SIN;
+  const ls = sn * SENSE_COS - c * SENSE_SIN;
+  const rc = c * SENSE_COS - sn * SENSE_SIN;
+  const rs = sn * SENSE_COS + c * SENSE_SIN;
+  const left = patch(f, x + lc * SENSE, y + ls * SENSE, px, py);
+  const ahead = patch(f, x + c * SENSE, y + sn * SENSE, px, py);
+  const right = patch(f, x + rc * SENSE, y + rs * SENSE, px, py);
   if (left > ahead && left > right) return a - max;
   if (right > ahead && right > left) return a + max;
   return a;
@@ -232,8 +260,9 @@ function step(dt: number, w: number, h: number): void {
     const nx = x + Math.cos(a) * SPEED * dt;
     const ny = y + Math.sin(a) * SPEED * dt;
     if (blocked(nx, ny, w, h)) {
-      // Bump: slide along the obstacle if either side is free, otherwise turn round.
-      const side = Math.random() < 0.5 ? 1 : -1;
+      // Bump: slide along the obstacle if either side is free, otherwise turn round. The slide angle varies
+      // so carriers pressed against a wall spread out instead of queueing in one line.
+      const side = (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8);
       if (!blocked(x + Math.cos(a + side) * 4, y + Math.sin(a + side) * 4, w, h)) a += side;
       else if (!blocked(x + Math.cos(a - side) * 4, y + Math.sin(a - side) * 4, w, h)) a -= side;
       else a += Math.PI + (Math.random() - 0.5);
@@ -250,8 +279,9 @@ function step(dt: number, w: number, h: number): void {
     else home[k] = Math.max(home[k], strength);
     if (!loaded && pile[k]) {
       pile[k]--;
+      foodLeft--;
       carrying[i] = 1;
-      bias[i] = (Math.random() - 0.5) * 0.5;
+      bias[i] = (Math.random() - 0.5) * 0.25;
       since[i] = 0;
       a += Math.PI;
     } else if (loaded && (x - nest.x) ** 2 + (y - nest.y) ** 2 < NEST_R * NEST_R) {
@@ -286,14 +316,24 @@ function paintField(): void {
       d[p + 3] = 120 + Math.min(135, pile[k] * 2);
       continue;
     }
-    // Home scent in sky blue, food scent in lime, blended where they overlap.
-    const hm = Math.min(1, home[k] * 1.5);
-    const fd = Math.min(1, food[k] * 1.5);
-    const sum = hm + fd || 1;
-    d[p] = (0x38 * hm + 0xcf * fd) / sum;
-    d[p + 1] = (0xbd * hm + 0xfb * fd) / sum;
-    d[p + 2] = (0xf8 * hm + 0x2d * fd) / sum;
-    d[p + 3] = Math.min(255, (hm + fd) * 200);
+    // Food scent (the colony recruiting) is the story, so it's lime and bright; home scent is a faint blue
+    // underlay. Squaring the strength keeps weak, fading scent nearly invisible, so busy trails stand out
+    // instead of the whole field filling with haze.
+    const fd = Math.min(1, food[k] * 1.4);
+    const hm = Math.min(1, home[k] * 1.4);
+    const fa = fd * fd * 235;
+    const ha = hm * hm * 70;
+    if (fa >= ha) {
+      d[p] = 0xcf;
+      d[p + 1] = 0xfb;
+      d[p + 2] = 0x2d;
+      d[p + 3] = fa;
+    } else {
+      d[p] = 0x38;
+      d[p + 1] = 0xbd;
+      d[p + 2] = 0xf8;
+      d[p + 3] = ha;
+    }
   }
   (field.getContext("2d") as OffscreenCanvasRenderingContext2D).putImageData(pixels, 0, 0);
   draw.invalidate(field);
@@ -320,14 +360,18 @@ function frame(now: number): void {
   const t0 = performance.now();
   if (!paused) step(dt, w, h);
   simMs += (performance.now() - t0 - simMs) * 0.05;
-  paintField();
+  // While paused the field only changes when someone paints on it.
+  if (!paused || dirty) paintField();
+  dirty = false;
   draw.begin("#11140d", w, h, dpr);
-  draw.sprite(field, 0, 0, { origin: [0, 0], scaleX: CELL, scaleY: CELL });
+  draw.sprite(field, 0, 0, { origin: [0, 0], scaleX: CELL, scaleY: CELL, smooth: true });
   draw.circle(nest.x, nest.y, NEST_R, "#38bdf8");
   draw.sprites(antTex, ax, n, undefined, { rotation: angle, color: colors });
+  // Show the brush under the pointer, in the colour of what it paints.
+  if (hover.on) ring(draw, hover.x, hover.y, tool === "food" ? 14 : 8, 1.5, TOOL_COLOR[tool]);
   draw.end();
   if (Math.floor(now / 250) !== Math.floor((now - dt * 1000) / 250))
-    stats.textContent = `${n.toLocaleString()} ants · ${delivered.toLocaleString()} food brought home · ${Math.round(fps)} fps · simulate ${simMs.toFixed(1)} ms · ${draw.kind}`;
+    stats.textContent = `${n.toLocaleString()} ants · ${delivered.toLocaleString()} food brought home · ${foodLeft ? `${foodLeft.toLocaleString()} left` : "all eaten: drop more food"} · ${Math.round(fps)} fps · simulate ${simMs.toFixed(1)} ms · ${draw.kind}`;
   requestAnimationFrame(frame);
 }
 
