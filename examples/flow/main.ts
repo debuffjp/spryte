@@ -3,7 +3,7 @@
 // with additive blending in one sprites() call; a grain shader finishes the frame on WebGL2.
 // The other modes (waves.ts, river.ts, galaxy.ts) simulate and project their own particles and are
 // drawn straight to the screen.
-import { createRenderer, type Draw, polygon, type RenderTarget, type Shader } from "spryte";
+import { createRenderer, type Draw, type GpuTimer, gpuTimer, polygon, type RenderTarget, type Shader } from "spryte";
 import * as galaxy from "./galaxy.ts";
 import { css, PALETTES } from "./palettes.ts";
 import * as river from "./river.ts";
@@ -44,6 +44,8 @@ const CAPTIONS: Record<Mode, string> = {
 };
 let canvas = document.createElement("canvas");
 let draw: Draw;
+// GPU time per frame, where the browser can measure it (Chromium on desktop).
+let gpu!: GpuTimer;
 let trails: RenderTarget | null = null;
 let grain: Shader | null = null;
 
@@ -54,6 +56,8 @@ function makeRenderer(): void {
   if (!next.isConnected) stage.append(next);
   canvas = next;
   draw = createRenderer(canvas, { backend });
+  gpu?.dispose();
+  gpu = gpuTimer(draw);
   trails = null;
   grain =
     draw.kind === "webgl2"
@@ -272,6 +276,7 @@ function frame(now: number): void {
     // The fluid is far more expensive per particle, so it gets a fifth of the count.
     const count = scene.step(mode === "river" ? Math.round(n / 5) : n, dt, now, W, H, dpr, camera, reducedMotion);
     const d0 = performance.now();
+    gpu.begin();
     draw.begin(BG, W / dpr, H / dpr, dpr);
     draw.push();
     draw.scale(1 / dpr);
@@ -290,6 +295,7 @@ function frame(now: number): void {
     } else draw.sprites(mode === "river" ? disc : dot, scene.positions, count, undefined, { color: scene.colors, scale: scene.scales });
     draw.pop();
     draw.end();
+    gpu.end();
     drawMs += (performance.now() - d0 - drawMs) * 0.05;
     drawn = count;
     work += (performance.now() - t0 - work) * 0.05;
@@ -299,6 +305,7 @@ function frame(now: number): void {
   }
   step2d(dt, W, H, dpr, now);
 
+  gpu.begin();
   draw.begin(BG, W / dpr, H / dpr, dpr);
   const pts = positions;
   const each = { color: colors };
@@ -319,6 +326,7 @@ function frame(now: number): void {
     draw.withShader(grain, show);
   } else show();
   draw.end();
+  gpu.end();
   work += (performance.now() - t0 - work) * 0.05;
   report(now, dt);
   requestAnimationFrame(frame);
@@ -425,7 +433,7 @@ function report(now: number, dt: number): void {
           : mode === "galaxy"
             ? `${drawn.toLocaleString()} stars`
             : `${n.toLocaleString()} particles`;
-    stats.textContent = `${count} · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS per frame${split} · ${draw.kind} · ${draw.drawCalls} draw calls`;
+    stats.textContent = `${count} · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS per frame${split} · ${gpu.ms === undefined ? "GPU time n/a" : `GPU ${gpu.ms.toFixed(1)} ms`} · ${draw.kind} · ${draw.drawCalls} draw calls`;
   }
 }
 

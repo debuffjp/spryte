@@ -187,6 +187,20 @@ Needs Pixi's WebGL renderer, which runs on WebGL2 (`preference: "webgl"`; WebGPU
 
 `kind` (`"webgl2"` or `"2d"`), `contextLost`, `quads` (submitted this frame), `drawCalls` (GPU draw calls this frame on WebGL2; one per quad on Canvas 2D), and `raw` (`{ kind: "webgl2", gl }` or `{ kind: "2d", ctx }`). If you mix raw calls with `draw` calls, restore the state you change.
 
+**GPU time** (0.8+): `gpuTimer(draw)` measures how long the GPU spends on what you draw between its `begin()` and `end()`, to tell a GPU-bound frame (draw less) from a CPU-bound one (simulate less). `ms` is smoothed, arrives a few frames late and never blocks; it is `undefined` until the first result, and wherever timing isn't available: Canvas 2D, and browsers without `EXT_disjoint_timer_query_webgl2` (in practice everything but Chromium on desktop). One GPU timer can run at a time, so inside a host engine or alongside a profiler that already times the frame, frames are skipped. Separately imported, so it costs nothing unless you use it.
+
+```ts
+import { gpuTimer } from "spryte";
+const gpu = gpuTimer(draw);
+// each frame:
+gpu.begin();
+draw.begin("#000", w, h, dpr);
+// ...draw...
+draw.end();
+gpu.end();
+console.log(gpu.ms); // e.g. 1.5, or undefined
+```
+
 ## Resource ownership
 
 - spryte never owns your images. Textures are cached per image object and dropped by `invalidate(image)` or `dispose()`.

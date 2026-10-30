@@ -29,6 +29,8 @@ export class Canvas2DBackend implements Backend {
   private scratch: HTMLCanvasElement | OffscreenCanvas | undefined;
   /** Recoloured frames per source, keyed by rect, tint and flash. */
   private shades = new WeakMap<object, Map<string, Surface>>();
+  /** The last tinted region handed out, checked before building a cache key. */
+  private memo: { src: CanvasImageSource; x: number; y: number; w: number; h: number; rgb: number; f: number; out: Surface } | null = null;
   private clipped = false;
   private blendMode: BlendMode | "mask" = "normal";
 
@@ -184,9 +186,12 @@ export class Canvas2DBackend implements Backend {
 
   invalidate(src: TextureSource): void {
     this.shades.delete(src);
+    if (this.memo?.src === src) this.memo = null;
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.memo = null;
+  }
 
   setTarget(target: RenderTarget | null, clear: number | null, width: number, _height: number): void {
     this.ctx = target ? (this.surface(target).getContext("2d") as CanvasRenderingContext2D) : this.screen;
@@ -254,10 +259,19 @@ export class Canvas2DBackend implements Backend {
    */
   private shaded(src: CanvasImageSource, live: boolean, x: number, y: number, w: number, h: number, rgb: number, flash: number): Surface {
     const f = Math.round(Math.min(1, Math.max(0, flash || 0)) * 255);
+    // Bulk copies usually repeat the last tint: answer that without building a key.
+    const m = this.memo;
+    if (!live && m && m.src === src && m.x === x && m.y === y && m.w === w && m.h === h && m.rgb === rgb && m.f === f) return m.out;
     const key = `${x},${y},${w},${h},${rgb},${f}`;
     let cache = live ? undefined : this.shades.get(src);
     const hit = cache?.get(key);
-    if (hit) return hit;
+    if (hit && cache) {
+      // Least recently used goes first: Map keeps insertion order, so re-inserting marks it as fresh.
+      cache.delete(key);
+      cache.set(key, hit);
+      this.memo = { src, x, y, w, h, rgb, f, out: hit };
+      return hit;
+    }
     const pw = Math.ceil(w);
     const ph = Math.ceil(h);
     const out: Surface = live ? this.scratchCanvas(pw, ph) : newSurface(pw, ph);
@@ -282,9 +296,11 @@ export class Canvas2DBackend implements Backend {
         cache = new Map();
         this.shades.set(src, cache);
       }
-      // Animated tints would grow this forever; start over rather than track recency.
-      if (cache.size >= 256) cache.clear();
+      // Animated tints would grow this forever, so the least recently used goes. Clearing everything instead made
+      // more than 256 tints miss on nearly every copy (seconds per frame).
+      if (cache.size >= SHADE_LIMIT) cache.delete(cache.keys().next().value as string);
       cache.set(key, out);
+      this.memo = { src, x, y, w, h, rgb, f, out };
     }
     return out;
   }
@@ -296,6 +312,9 @@ export class Canvas2DBackend implements Backend {
     return this.scratch;
   }
 }
+
+/** Tinted regions kept per image: enough for continuous colour without unbounded growth. */
+const SHADE_LIMIT = 1024;
 
 function newSurface(w: number, h: number): Surface {
   if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);

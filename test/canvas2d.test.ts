@@ -137,4 +137,50 @@ describe("Canvas2DBackend tint", () => {
     expect(draws[0]?.args[0]).toBe(src);
     expect(draws[1]?.args[0]).not.toBe(src);
   });
+
+  // happy-dom canvases have no 2D context, so recoloured copies would never be cached: give them a minimal one.
+  const offscreen = () => {
+    const fake = () =>
+      ({
+        drawImage() {},
+        putImageData() {},
+        getImageData: (_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      }) as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(fake);
+    // Recoloured copies are OffscreenCanvases where the environment has them.
+    if (typeof OffscreenCanvas !== "undefined") vi.spyOn(OffscreenCanvas.prototype, "getContext").mockImplementation(fake as never);
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps more than 256 tints cached, so a second frame reuses every recoloured copy", () => {
+    offscreen();
+    const { ctx, calls } = recordingContext();
+    const backend = new Canvas2DBackend(ctx);
+    const src = { width: 4, height: 4 } as unknown as HTMLCanvasElement;
+    const m = [1, 0, 0, 1, 0, 0] as unknown as Parameters<Canvas2DBackend["quad"]>[0];
+    const frame = () => {
+      for (let i = 0; i < 300; i++) backend.quad(m, src, 0, 0, 4, 4, ((i * 0x010203) << 8) | 0xff, 0, false);
+      return calls
+        .splice(0)
+        .filter((c) => c.name === "drawImage")
+        .map((c) => c.args[0]);
+    };
+    const first = frame();
+    const second = frame();
+    // Before 0.8 the cache cleared at 256 entries, so these were all fresh copies again.
+    expect(second.every((s, i) => s === first[i])).toBe(true);
+  });
+
+  it("invalidate() drops a remembered recoloured copy", () => {
+    offscreen();
+    const { ctx, calls } = recordingContext();
+    const backend = new Canvas2DBackend(ctx);
+    const src = { width: 4, height: 4 } as unknown as HTMLCanvasElement;
+    const m = [1, 0, 0, 1, 0, 0] as unknown as Parameters<Canvas2DBackend["quad"]>[0];
+    backend.quad(m, src, 0, 0, 4, 4, 0xcffb2dff, 0, false);
+    backend.invalidate(src);
+    backend.quad(m, src, 0, 0, 4, 4, 0xcffb2dff, 0, false);
+    const [a, b] = calls.filter((c) => c.name === "drawImage").map((c) => c.args[0]);
+    expect(b).not.toBe(a);
+  });
 });

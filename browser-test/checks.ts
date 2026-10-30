@@ -11,6 +11,7 @@ import {
   type Filter,
   type Frame,
   filter,
+  gpuTimer,
   grayscale,
   hueRotate,
   invert,
@@ -303,6 +304,35 @@ for (const backend of ["webgl2", "2d"] as const) {
 const pixelAt = (px: Uint8Array, x: number, y: number) => Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 4));
 const check = (name: string, pass: boolean, detail: string) =>
   results.push({ name: `${name}: ${detail}`, differing: pass ? 0 : 1, nonBackground: 1000 });
+
+// gpuTimer on a real GPU: a positive time once results arrive, or unsupported with no number at all.
+{
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const draw = createRenderer(canvas, { backend: "webgl2" });
+  await draw.ready;
+  const gpu = gpuTimer(draw);
+  const pos = Float32Array.from({ length: 20_000 }, (_, i) => (i % 2 ? (i * 7) % H : (i * 13) % W));
+  for (let f = 0; f < 30 && (gpu.ms === undefined || f < 6); f++) {
+    gpu.begin();
+    draw.begin("#000", W, H, 1);
+    draw.sprites(img, pos);
+    draw.end();
+    gpu.end();
+    // Results are only available after control returns to the event loop.
+    await new Promise((r) => setTimeout(r, 16));
+  }
+  const ms = gpu.ms;
+  check(
+    "gpuTimer reports GPU time or nothing",
+    gpu.supported ? ms !== undefined && Number.isFinite(ms) && ms > 0 : ms === undefined,
+    gpu.supported ? `${ms?.toFixed(3)} ms` : "unsupported here (no EXT_disjoint_timer_query_webgl2)",
+  );
+  gpu.dispose();
+  draw.dispose();
+  (draw.raw as { gl: WebGL2RenderingContext }).gl.getExtension("WEBGL_lose_context")?.loseContext();
+}
 
 // An index past the end of the frames throws with a message rather than a TypeError deep in a backend.
 for (const backend of ["webgl2", "2d"] as const) {

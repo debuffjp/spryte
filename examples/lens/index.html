@@ -37,6 +37,13 @@
       footer { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 20px 12px; color: var(--text-3); font-size: 12px; }
       .fell { color: var(--lime); }
       .found { color: var(--sky); }
+      footer { align-items: center; }
+      button.kind { font-size: 12px; padding: 3px 10px; }
+      button.kind span.fell { color: var(--lime); margin: 0; font-size: inherit; }
+      button.kind span.found { color: var(--sky); margin: 0; font-size: inherit; }
+      button.kind[aria-pressed="true"] { color: var(--text); background: var(--soft); }
+      button.kind[aria-pressed="false"] { opacity: 0.45; background: transparent; text-decoration: line-through; }
+      #filter { font-size: 12px; padding: 1px 10px; margin-right: 8px; color: var(--ink); background: var(--lime); }
       @media (max-width: 600px) {
         header { padding: 10px 12px 6px; }
         #caption, #stats, footer { padding-left: 12px; padding-right: 12px; }
@@ -67,10 +74,14 @@
       </fieldset>
     </header>
     <div id="caption"></div>
-    <div id="stats"></div>
+    <div id="stats"><button type="button" id="filter" hidden></button><span id="readout"></span></div>
     <div id="stage"></div>
     <footer>
-      <span><span class="fell">●</span> seen falling · <span class="found">●</span> found later · move or drag to aim the lens, scroll to resize, keys 1-4 switch views</span>
+      <fieldset class="group" id="kinds" aria-label="Show">
+        <button type="button" class="kind" data-kind="fell" aria-pressed="true"><span class="fell">●</span> seen falling</button>
+        <button type="button" class="kind" data-kind="found" aria-pressed="true"><span class="found">●</span> found later</button>
+      </fieldset>
+      <span id="help">move to aim the lens, scroll to resize · on a chart, click a bar or drag across bars to filter every view · keys 1-4 switch views</span>
       <span>Data: NASA Open Data Portal, from The Meteoritical Society · <a href="https://github.com/debuffjp/debuff/tree/main/packages/spryte/examples/lens">source</a></span>
     </footer>
     <script type="module" src="./main.ts"></script>

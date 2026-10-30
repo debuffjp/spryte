@@ -21,6 +21,7 @@ export {
   saturate,
   sepia,
 } from "./filters.js";
+export { type GpuTimer, gpuTimer } from "./gpu-timer.js";
 export { mask } from "./mask.js";
 export { nineSlice, type PanelDrawOptions, type TiledDrawOptions, tiled } from "./panels.js";
 export { createRenderer, type RendererOptions } from "./renderer.js";

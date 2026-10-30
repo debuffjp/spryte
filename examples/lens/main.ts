@@ -94,11 +94,24 @@ let lastInput = -1e9;
 let viewSince = 0;
 let replayYear = REPLAY_FROM;
 const lens = { x: 0, y: 0, r: 60, on: false };
+const show = { fell: true, found: true };
+// A range of chart columns picked by clicking or dragging on the mass or year chart. Points outside it
+// fade in every view, so a chart doubles as a filter for the map.
+let filter: { view: "mass" | "year"; lo: number; hi: number } | undefined;
+let brush: { from: number; to: number; x: number } | undefined;
 
 const stage = document.getElementById("stage") as HTMLDivElement;
 if (innerWidth < 600) lens.r = 32; // a phone map is small
 const caption = document.getElementById("caption") as HTMLDivElement;
-const stats = document.getElementById("stats") as HTMLDivElement;
+const readout = document.getElementById("readout") as HTMLSpanElement;
+const filterChip = document.getElementById("filter") as HTMLButtonElement;
+const isChart = (): boolean => view === "mass" || view === "year";
+const visible = (i: number): boolean => (fell[i % BASE] ? show.fell : show.found);
+function matches(i: number): boolean {
+  if (!filter) return true;
+  const b = Math.floor((filter.view === "mass" ? mass : time)[i] * BINS);
+  return b >= filter.lo && b <= filter.hi;
+}
 let canvas = document.createElement("canvas");
 let draw: Draw = makeRenderer();
 
@@ -156,17 +169,51 @@ document.getElementById("copies")?.addEventListener("click", (e) => {
   press("copies", "copies", String(c));
   layoutKey = "";
 });
+document.getElementById("kinds")?.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-kind]");
+  const kind = b?.dataset.kind as "fell" | "found" | undefined;
+  if (!b || !kind) return;
+  show[kind] = !show[kind];
+  if (!show.fell && !show.found) show[kind === "fell" ? "found" : "fell"] = true; // never an empty chart
+  for (const k of ["fell", "found"] as const) document.querySelector(`[data-kind="${k}"]`)?.setAttribute("aria-pressed", String(show[k]));
+  layoutKey = "";
+});
+filterChip.addEventListener("click", () => setFilter(undefined));
+function setFilter(f: typeof filter): void {
+  filter = f;
+  filterChip.hidden = !f;
+  if (f) filterChip.textContent = `${binLabel(f.view, f.lo, f.hi)} ×`;
+}
+
 function aim(e: PointerEvent): void {
   const r = stage.getBoundingClientRect();
   lens.x = e.clientX - r.left;
   lens.y = e.clientY - r.top;
   lens.on = true;
   takeOver();
+  if (brush) brush.to = binAt(lens.x);
 }
 stage.addEventListener("pointermove", aim);
-stage.addEventListener("pointerdown", aim);
+stage.addEventListener("pointerdown", (e) => {
+  aim(e);
+  if (!isChart()) return;
+  stage.setPointerCapture(e.pointerId);
+  const b = binAt(lens.x);
+  brush = { from: b, to: b, x: lens.x };
+});
+stage.addEventListener("pointerup", () => {
+  if (!brush) return;
+  const lo = Math.min(brush.from, brush.to);
+  const hi = Math.max(brush.from, brush.to);
+  const v = view as "mass" | "year";
+  const click = Math.abs(lens.x - brush.x) < 4;
+  brush = undefined;
+  // Clicking the bar that is already the whole filter, or empty space, clears it.
+  if (lo < 0 || (click && filter?.view === v && filter.lo === lo && filter.hi === hi)) setFilter(undefined);
+  else setFilter({ view: v, lo: Math.max(0, lo), hi: Math.min(BINS - 1, hi) });
+});
 stage.addEventListener("pointerleave", (e) => {
-  if (e.pointerType === "mouse") lens.on = false;
+  if (e.pointerType === "mouse" && !brush) lens.on = false;
 });
 stage.addEventListener(
   "wheel",
@@ -187,9 +234,34 @@ addEventListener("keydown", (e) => {
 
 // Where everything goes in the current view. Recomputed only when the view, size or count changes.
 const box = { x: 0, y: 0, w: 0, h: 0 };
+let colW = 1;
+let dotScale = 0.5; // a dot's resting scale in the current layout
+const fellCounts = new Uint32Array(BINS);
+const yTicks: [number, number][] = []; // [y, meteorites]
 let layoutKey = "";
+
+function binAt(x: number): number {
+  const b = Math.floor((x - box.x) / colW);
+  return b >= 0 && b < BINS ? b : -1;
+}
+function grams(t: number): string {
+  const g = 10 ** (MIN_LOG + t * (MAX_LOG - MIN_LOG));
+  return g >= 1e6
+    ? `${Number((g / 1e6).toPrecision(2))} t`
+    : g >= 1000
+      ? `${Number((g / 1000).toPrecision(2))} kg`
+      : `${Number(g.toPrecision(2))} g`;
+}
+// The range a run of columns covers, in the chart's own units.
+function binLabel(v: "mass" | "year", lo: number, hi: number): string {
+  if (v === "mass") return `${grams(lo / BINS)} to ${grams((hi + 1) / BINS)}`;
+  const span = (LAST_YEAR + 1 - FIRST_YEAR) / BINS;
+  const from = Math.ceil(FIRST_YEAR + lo * span);
+  const to = Math.ceil(FIRST_YEAR + (hi + 1) * span) - 1;
+  return lo === 0 ? `up to ${to}` : from === to ? String(from) : `${from} to ${to}`;
+}
 function layout(w: number, h: number): void {
-  const key = `${view} ${w} ${h} ${n}`;
+  const key = `${view} ${w} ${h} ${n} ${show.fell} ${show.found}`;
   if (key === layoutKey) return;
   layoutKey = key;
   const pad = 16;
@@ -201,31 +273,55 @@ function layout(w: number, h: number): void {
     box.h = mw / 2;
     box.x = (w - mw) / 2;
     box.y = Math.max(pad, (h - bottom - box.h) / 2);
+    dotScale = 0.5;
     for (let i = 0; i < n; i++) {
       targets[i * 2] = box.x + mapX[i] * box.w;
       targets[i * 2 + 1] = box.y + mapY[i] * box.h;
     }
     return;
   }
-  box.x = pad;
-  box.y = pad;
-  box.w = w - pad * 2;
-  box.h = h - pad - bottom;
+  const left = 44; // room for the count labels
+  box.x = left;
+  box.y = pad + 8;
+  box.w = w - left - pad;
+  box.h = h - pad - 8 - bottom;
   const value = view === "mass" ? mass : time;
   counts.fill(0);
-  for (let i = 0; i < n; i++) counts[Math.floor(value[i] * BINS)]++;
+  fellCounts.fill(0);
+  for (let i = 0; i < n; i++) {
+    if (!visible(i)) continue;
+    const b = Math.floor(value[i] * BINS);
+    counts[b]++;
+    if (fell[i % BASE]) fellCounts[b]++;
+  }
   let tallest = 1;
   for (let b = 0; b < BINS; b++) tallest = Math.max(tallest, counts[b]);
-  const colW = box.w / BINS;
-  const across = Math.max(1, Math.floor((colW - 1) / 3));
-  // Dots sit 3 px apart; rows squeeze together when the tallest column would overflow.
-  const rowStep = Math.min(3, (box.h * across) / tallest);
+  colW = box.w / BINS;
+  // Dots sit 3 px apart and rows squeeze together when the tallest column would overflow. A short chart
+  // (only the falls, say) uses fewer, bigger dots per row instead, so it still fills the height.
+  const most = Math.max(1, Math.floor((colW - 1) / 3));
+  const across = Math.min(most, Math.max(1, Math.ceil((tallest * 3) / box.h)));
+  const step = Math.min(12, (colW - 1) / across);
+  const rowStep = Math.min(step, (box.h * across) / tallest);
+  dotScale = (0.5 * Math.min(step, rowStep < 3 ? 3 : rowStep)) / 3;
+  // Gridlines at a round number of meteorites (not points), about four up the chart.
+  const copies = n / BASE;
+  const perPx = across / rowStep / copies; // meteorites per pixel of column height
+  const top = box.h * perPx;
+  const mag = 10 ** Math.floor(Math.log10(top / 4));
+  const tick = [1, 2, 5, 10].map((m) => m * mag).find((s) => top / s <= 5) ?? mag * 10;
+  yTicks.length = 0;
+  for (let v = tick; v <= top; v += tick) yTicks.push([box.y + box.h - v / perPx, v]);
   filled.fill(0);
-  for (let k = 0; k < n; k++) {
+  // `order` covers every copy up to the most the page allows; only the first n copies are drawn, so skip the
+  // rest. Taking the first n entries instead left drawn copies without a place (stranded on the map) and
+  // filled the bottom of each column with copies nobody sees.
+  for (let k = 0; k < CAP; k++) {
     const i = order[k];
+    if (i >= n || !visible(i)) continue;
     const b = Math.floor(value[i] * BINS);
     const slot = filled[b]++;
-    targets[i * 2] = box.x + b * colW + 2 + (slot % across) * 3;
+    targets[i * 2] = box.x + b * colW + 2 + (slot % across) * step;
     targets[i * 2 + 1] = box.y + box.h - Math.floor(slot / across) * rowStep;
   }
 }
@@ -257,6 +353,15 @@ function axes(): void {
     }
     return;
   }
+  for (const [ty, v] of yTicks) {
+    draw.rect(box.x, ty, box.w, 1, "#1b2113");
+    draw.text(v.toLocaleString(), box.x - 6, ty, { font, color: "#777", align: "right", baseline: "middle" });
+  }
+  if (filter?.view === view || brush) {
+    const lo = brush ? Math.min(brush.from, brush.to) : (filter?.lo ?? 0);
+    const hi = brush ? Math.max(brush.from, brush.to) : (filter?.hi ?? 0);
+    if (lo >= 0) draw.rect(box.x + lo * colW, box.y, (hi - lo + 1) * colW, box.h + 2, "#cffb2d14");
+  }
   draw.rect(box.x, box.y + box.h + 2, box.w, 1, "#2c3521");
   const ticks: [number, string][] =
     view === "mass"
@@ -267,7 +372,7 @@ function axes(): void {
         ].map(([l, s]) => [((l as number) - MIN_LOG) / (MAX_LOG - MIN_LOG), s as string])
       : [1925, 1950, 1975, 2000].map((yr) => [(yr - FIRST_YEAR) / (LAST_YEAR + 1 - FIRST_YEAR), String(yr)]);
   for (const [t, s] of ticks) draw.text(s, box.x + t * box.w, y, label);
-  if (view === "year") draw.text("before 1900", box.x, y, { font, color: "#777" });
+  if (view === "year") draw.text("up to 1901", box.x, y, { font, color: "#777" });
 }
 
 let last = 0;
@@ -308,7 +413,9 @@ function frame(now: number): void {
   let under = 0;
   let underFell = 0;
   massBins.fill(0);
-  const dim = lens.on ? 0x66 : 0xcc;
+  const chart = isChart();
+  const useLens = lens.on && !chart; // on a chart the pointer picks columns instead
+  const dim = useLens ? 0x66 : 0xcc;
   for (let i = 0; i < n; i++) {
     const j = i * 2;
     const k = 1 - Math.exp(-dt * rate[i]);
@@ -316,7 +423,12 @@ function frame(now: number): void {
     const y = positions[j + 1] + (targets[j + 1] - positions[j + 1]) * k;
     positions[j] = x;
     positions[j + 1] = y;
-    let scale = 0.5;
+    let scale = dotScale;
+    if (!visible(i)) {
+      colors[i] = 0;
+      scales[i] = 0;
+      continue;
+    }
     if (replaying) {
       // Not recorded yet: hidden. Just recorded: a bright pop that settles over about two years.
       const age = shownYear - year[i % BASE];
@@ -329,14 +441,18 @@ function frame(now: number): void {
       if (age < 2) scale = 0.5 + (1 - age / 2) * 1.5;
     }
     scales[i] = scale;
+    if (!matches(i)) {
+      colors[i] = ((base[i] << 8) | 0x1c) >>> 0;
+      continue;
+    }
     const dx = x - lens.x;
     const dy = y - lens.y;
-    if (lens.on && dx * dx + dy * dy < r2) {
+    if (useLens && dx * dx + dy * dy < r2) {
       under++;
       if (fell[i % BASE]) underFell++;
       massBins[Math.floor(mass[i] * 100)]++;
       colors[i] = ((base[i] << 8) | 0xff) >>> 0;
-    } else colors[i] = ((base[i] << 8) | (scale > 0.5 ? 0xff : dim)) >>> 0;
+    } else colors[i] = ((base[i] << 8) | (scale > dotScale ? 0xff : dim)) >>> 0;
   }
 
   draw.begin("#11140d", w, h, dpr);
@@ -350,7 +466,22 @@ function frame(now: number): void {
     draw.rect(box.x, box.y + box.h + 8, box.w, 2, "#28301d");
     draw.rect(box.x, box.y + box.h + 8, box.w * Math.max(0, t), 2, "#999");
   }
-  if (lens.on) ring(draw, lens.x, lens.y, lens.r, 1.5, "#ffffffaa");
+  if (useLens) ring(draw, lens.x, lens.y, lens.r, 1.5, "#ffffffaa");
+  let hover = "";
+  const hb = chart && lens.on && !auto ? binAt(lens.x) : -1;
+  if (hb >= 0) {
+    const copies = n / BASE;
+    const total = Math.round(counts[hb] / copies);
+    const falls = Math.round(fellCounts[hb] / copies);
+    hover = `${binLabel(view as "mass" | "year", hb, hb)}: ${total.toLocaleString()} meteorites, ${falls.toLocaleString()} seen falling`;
+    draw.rect(box.x + hb * colW, box.y, colW, box.h + 2, "#ffffff10");
+    const font = "12px sans-serif";
+    const size = draw.measure(hover, font);
+    const tx = Math.min(lens.x + 14, w - size.w - 18);
+    const ty = Math.max(4, lens.y - size.h - 18);
+    draw.rect(tx - 6, ty - 4, size.w + 12, size.h + 8, "#000000cc");
+    draw.text(hover, tx, ty, { font, color: "#e8ecdf" });
+  }
   draw.end();
   work += (performance.now() - t0 - work) * 0.05;
 
@@ -360,22 +491,18 @@ function frame(now: number): void {
     for (let b = 0; b < 100; b++) {
       seen += massBins[b];
       if (seen * 2 >= under) {
-        const grams = 10 ** (MIN_LOG + ((b + 0.5) / 100) * (MAX_LOG - MIN_LOG));
-        median =
-          grams >= 1e6
-            ? `${Number((grams / 1e6).toPrecision(2))} t`
-            : grams >= 1000
-              ? `${Number((grams / 1000).toPrecision(2))} kg`
-              : `${Number(grams.toPrecision(2))} g`;
+        median = grams((b + 0.5) / 100);
         break;
       }
     }
   }
   if (Math.floor(now / 250) !== Math.floor((now - dt * 1000) / 250)) {
-    const lensText = under
-      ? `lens: ${under.toLocaleString()} (${Math.round((underFell / under) * 100)}% seen falling, median ${median})`
-      : "lens: empty";
-    stats.textContent = `${lensText} · ${n.toLocaleString()} points · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS per frame · ${draw.kind} · ${draw.drawCalls} draw calls`;
+    const lensText = chart
+      ? ""
+      : under
+        ? `lens: ${under.toLocaleString()} (${Math.round((underFell / under) * 100)}% seen falling, median ${median}) · `
+        : "lens: empty · ";
+    readout.textContent = `${lensText}${n.toLocaleString()} points · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS per frame · ${draw.kind} · ${draw.drawCalls} draw calls`;
   }
   requestAnimationFrame(frame);
 }
