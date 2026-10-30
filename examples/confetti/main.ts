@@ -157,11 +157,13 @@ function frame(now: number): void {
   draw.end();
   work += (performance.now() - t0 - work) * 0.05;
   if (Math.floor(now / 250) !== Math.floor((now - dt * 1000) / 250))
-    stats.textContent = `${alive.toLocaleString()} pieces · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS · ${draw.kind}`;
+    stats.textContent = `${alive.toLocaleString()} pieces · ${Math.round(fps)} fps · ${work.toFixed(1)} ms of JS · ${draw.kind} · ${draw.drawCalls} draw calls`;
   requestAnimationFrame(frame);
 }
 
 press("sizes", "size", String(size));
 press("backends", "backend", backend);
-setTimeout(() => fromElement(document.getElementById("pop") as Element, size), 400);
+// Nothing moves on its own for visitors who ask for less motion; the buttons still work.
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches)
+  setTimeout(() => fromElement(document.getElementById("pop") as Element, size), 400);
 requestAnimationFrame(frame);

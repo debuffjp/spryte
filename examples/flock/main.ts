@@ -19,6 +19,8 @@ const cellOf = new Int32Array(CAP);
 const sorted = new Int32Array(CAP);
 let cellStart = new Int32Array(1);
 let cols = 1;
+let cellW = SEE;
+let cellH = SEE;
 let rows = 1;
 
 // Heading to colour: a 64-step wheel through the site's accent colours.
@@ -53,6 +55,15 @@ let backend: "auto" | "2d" = params.get("backend") === "2d" ? "2d" : "auto";
 let n = innerWidth < 600 ? 2000 : 5000;
 const rule = { ...DEFAULTS };
 const predator = { x: 0, y: 0, on: false };
+// Visitors who ask for less motion get a still flock until they press Play.
+let paused = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const pauseButton = document.getElementById("pause") as HTMLButtonElement;
+function setPaused(p: boolean): void {
+  paused = p;
+  pauseButton.textContent = p ? "Play" : "Pause";
+  pauseButton.setAttribute("aria-pressed", String(p));
+}
+pauseButton.addEventListener("click", () => setPaused(!paused));
 
 const stage = document.getElementById("stage") as HTMLDivElement;
 const stats = document.getElementById("stats") as HTMLDivElement;
@@ -121,8 +132,12 @@ stage.addEventListener("pointerleave", () => {
 
 /** Buckets every boid by grid cell with a counting sort, so neighbours sit together in `sorted`. */
 function bucket(w: number, h: number): void {
-  const c = Math.max(1, Math.ceil(w / SEE));
-  const r = Math.max(1, Math.ceil(h / SEE));
+  // Whole cells at least SEE wide that tile the stage exactly. A thin leftover row or column at the edge
+  // left boids near the wrap seeing almost none of their neighbours, and they piled into a band there.
+  const c = Math.max(1, Math.floor(w / SEE));
+  const r = Math.max(1, Math.floor(h / SEE));
+  cellW = w / c;
+  cellH = h / r;
   if (c !== cols || r !== rows || cellStart.length !== c * r + 1) {
     cols = c;
     rows = r;
@@ -130,8 +145,8 @@ function bucket(w: number, h: number): void {
   }
   cellStart.fill(0);
   for (let i = 0; i < n; i++) {
-    const cx = Math.min(cols - 1, Math.max(0, Math.floor(pos[i * 2] / SEE)));
-    const cy = Math.min(rows - 1, Math.max(0, Math.floor(pos[i * 2 + 1] / SEE)));
+    const cx = Math.min(cols - 1, Math.max(0, Math.floor(pos[i * 2] / cellW)));
+    const cy = Math.min(rows - 1, Math.max(0, Math.floor(pos[i * 2 + 1] / cellH)));
     const cell = cy * cols + cx;
     cellOf[i] = cell;
     cellStart[cell + 1]++;
@@ -164,15 +179,20 @@ function step(dt: number, w: number, h: number): void {
     const first = i % 9;
     for (let s = 0; s < 9 && seen < MAX_LOOK; s++) {
       const k = (first + s) % 9;
-      const nx = cx + (k % 3) - 1;
-      const ny = cy + ((k / 3) | 0) - 1;
-      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      // The world wraps, so the cells past an edge are the ones on the far side. Without this, boids at
+      // the edges saw half their neighbours and piled into a band along the border.
+      const nx = (cx + (k % 3) - 1 + cols) % cols;
+      const ny = (cy + ((k / 3) | 0) - 1 + rows) % rows;
       const c = ny * cols + nx;
       for (let q = cellStart[c]; q < cellStart[c + 1] && seen < MAX_LOOK; q++) {
         const o = sorted[q];
         if (o === i) continue;
-        const dx = pos[o * 2] - x;
-        const dy = pos[o * 2 + 1] - y;
+        let dx = pos[o * 2] - x;
+        let dy = pos[o * 2 + 1] - y;
+        if (dx > w / 2) dx -= w;
+        else if (dx < -w / 2) dx += w;
+        if (dy > h / 2) dy -= h;
+        else if (dy < -h / 2) dy += h;
         const d2 = dx * dx + dy * dy;
         if (d2 > see2 || d2 === 0) continue;
         seen++;
@@ -245,10 +265,10 @@ function frame(now: number): void {
     draw.resize(pw, ph);
   }
   const t0 = performance.now();
-  step(dt, w, h);
+  step(paused ? 0 : dt, w, h);
   const t1 = performance.now();
   draw.begin("#11140d", w, h, dpr);
-  draw.sprites(arrow, pos, n, { scale: 0.8 }, { rotation: rotations, color: colors });
+  draw.sprites(arrow, pos, n, undefined, { rotation: rotations, color: colors });
   if (predator.on) draw.rect(predator.x - 3, predator.y - 3, 6, 6, "#ffffff");
   draw.end();
   const t2 = performance.now();
@@ -259,6 +279,7 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
+setPaused(paused);
 press("counts", "count", String(n));
 press("backends", "backend", backend);
 requestAnimationFrame(() => {

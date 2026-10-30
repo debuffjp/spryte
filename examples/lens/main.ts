@@ -89,7 +89,9 @@ const params = new URLSearchParams(location.search);
 let view: View = "map";
 let backend: "auto" | "2d" = params.get("backend") === "2d" ? "2d" : "auto";
 let n = BASE;
-let auto = true; // views cycle and the lens drifts until someone takes over
+// Views cycle and the lens drifts until someone takes over, unless the visitor asks for less motion.
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let auto = !still;
 let lastInput = -1e9;
 let viewSince = 0;
 let replayYear = REPLAY_FROM;
@@ -191,14 +193,14 @@ function aim(e: PointerEvent): void {
   lens.y = e.clientY - r.top;
   lens.on = true;
   takeOver();
-  if (brush) brush.to = binAt(lens.x);
+  if (brush) brush.to = nearestBin(lens.x);
 }
 stage.addEventListener("pointermove", aim);
 stage.addEventListener("pointerdown", (e) => {
   aim(e);
   if (!isChart()) return;
   stage.setPointerCapture(e.pointerId);
-  const b = binAt(lens.x);
+  const b = nearestBin(lens.x);
   brush = { from: b, to: b, x: lens.x };
 });
 stage.addEventListener("pointerup", () => {
@@ -243,6 +245,10 @@ let layoutKey = "";
 function binAt(x: number): number {
   const b = Math.floor((x - box.x) / colW);
   return b >= 0 && b < BINS ? b : -1;
+}
+// A drag that starts or ends beside the chart still means the outermost column.
+function nearestBin(x: number): number {
+  return Math.min(BINS - 1, Math.max(0, Math.floor((x - box.x) / colW)));
 }
 function grams(t: number): string {
   const g = 10 ** (MIN_LOG + t * (MAX_LOG - MIN_LOG));
@@ -387,7 +393,7 @@ function frame(now: number): void {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
 
-  if (!auto && now - lastInput > 12000) auto = true;
+  if (!auto && !still && now - lastInput > 12000) auto = true;
   if (auto) {
     const replayLength = ((LAST_YEAR + 1 - REPLAY_FROM) / REPLAY_YEARS_PER_SECOND + REPLAY_HOLD) * 1000;
     if (now - viewSince > (view === "replay" ? replayLength : 5000)) {
