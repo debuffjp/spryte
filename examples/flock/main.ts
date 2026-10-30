@@ -17,6 +17,9 @@ const rotations = new Float32Array(CAP);
 const colors = new Uint32Array(CAP);
 const cellOf = new Int32Array(CAP);
 const sorted = new Int32Array(CAP);
+const near = new Float32Array(CAP * 2); // pos, vel and cell in cell order, rebuilt every step
+const nearVel = new Float32Array(CAP * 2);
+const nearCell = new Int32Array(CAP);
 let cellStart = new Int32Array(1);
 let cols = 1;
 let cellW = SEE;
@@ -154,6 +157,16 @@ function bucket(w: number, h: number): void {
   for (let k = 1; k < cellStart.length; k++) cellStart[k] += cellStart[k - 1];
   const fill = cellStart.slice(0, -1);
   for (let i = 0; i < n; i++) sorted[fill[cellOf[i]]++] = i;
+  // Copy the state into cell order, so a boid's neighbours sit next to it in memory. Reading them by
+  // index all over the arrays missed the cache on almost every read at large counts.
+  for (let q = 0; q < n; q++) {
+    const o = sorted[q];
+    near[q * 2] = pos[o * 2];
+    near[q * 2 + 1] = pos[o * 2 + 1];
+    nearVel[q * 2] = vel[o * 2];
+    nearVel[q * 2 + 1] = vel[o * 2 + 1];
+    nearCell[q] = cellOf[o];
+  }
 }
 
 function step(dt: number, w: number, h: number): void {
@@ -162,9 +175,10 @@ function step(dt: number, w: number, h: number): void {
   const fear2 = FEAR * FEAR;
   for (let i = 0; i < n; i++) {
     const j = i * 2;
-    const x = pos[j];
-    const y = pos[j + 1];
-    const cell = cellOf[i];
+    // Boid i is the i-th in cell order; its new state lands back at pos[i], so the order sticks.
+    const x = near[j];
+    const y = near[j + 1];
+    const cell = nearCell[i];
     const cx = cell % cols;
     const cy = (cell - cx) / cols;
     let seen = 0;
@@ -185,10 +199,9 @@ function step(dt: number, w: number, h: number): void {
       const ny = (cy + ((k / 3) | 0) - 1 + rows) % rows;
       const c = ny * cols + nx;
       for (let q = cellStart[c]; q < cellStart[c + 1] && seen < MAX_LOOK; q++) {
-        const o = sorted[q];
-        if (o === i) continue;
-        let dx = pos[o * 2] - x;
-        let dy = pos[o * 2 + 1] - y;
+        if (q === i) continue;
+        let dx = near[q * 2] - x;
+        let dy = near[q * 2 + 1] - y;
         if (dx > w / 2) dx -= w;
         else if (dx < -w / 2) dx += w;
         if (dy > h / 2) dy -= h;
@@ -202,14 +215,14 @@ function step(dt: number, w: number, h: number): void {
           sx -= dx / d2;
           sy -= dy / d2;
         }
-        ax += vel[o * 2];
-        ay += vel[o * 2 + 1];
+        ax += nearVel[q * 2];
+        ay += nearVel[q * 2 + 1];
         mx += dx;
         my += dy;
       }
     }
-    let vx = vel[j];
-    let vy = vel[j + 1];
+    let vx = nearVel[j];
+    let vy = nearVel[j + 1];
     if (seen) {
       vx += (sx * 900 * rule.sep + (ax / seen - vx) * rule.ali + (mx / seen) * rule.coh * 4) * dt * 2;
       vy += (sy * 900 * rule.sep + (ay / seen - vy) * rule.ali + (my / seen) * rule.coh * 4) * dt * 2;
