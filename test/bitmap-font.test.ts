@@ -55,6 +55,55 @@ describe("BitmapFont", () => {
 });
 
 describe("Draw with a BitmapFont", () => {
+  it.each([1, 2])("snaps aligned glyphs after scaling and translation at render scale %i", (scale) => {
+    const { draw, calls } = recorder();
+    const font = new BitmapFont({ frames: grid(2), chars: "ab", widths: 3 });
+    draw.begin("#000", 100, 100, scale);
+    draw.translate(0.5, 0.5);
+    draw.scale(2);
+    draw.text("ab", 20, 10, { font, align: "center", baseline: "middle" });
+    draw.text("ab", 20, 10, { font, align: "right", baseline: "bottom" });
+    const at = calls
+      .filter((c) => c.name === "setTransform")
+      .slice(-4)
+      .map((c) => [c.args[4], c.args[5]]);
+    expect(at).toEqual([
+      [35 * scale, 15 * scale],
+      [43 * scale, 15 * scale],
+      [27 * scale, 7 * scale],
+      [35 * scale, 7 * scale],
+    ]);
+    // Text snapping must not move subsequent draws.
+    expect(draw.m).toEqual([2, 0, 0, 2, 0.5, 0.5]);
+  });
+
+  it("snaps a measured, manually centred run after its transform", () => {
+    const { draw, calls } = recorder();
+    const font = new BitmapFont({ frames: grid(2), chars: "ab", widths: 3 });
+    const { w } = draw.measure("ab", font);
+    draw.translate((101 - w * 2) / 2, 5.5);
+    draw.scale(2);
+    draw.text("ab", 0, 0, { font });
+    const at = calls.filter((c) => c.name === "setTransform").map((c) => [c.args[4], c.args[5]]);
+    expect(at).toEqual([
+      [44, 6],
+      [52, 6],
+    ]);
+  });
+
+  it("keeps rotated and skewed glyphs on their transform", () => {
+    const font = new BitmapFont({ frames: grid(1), chars: "a", widths: 3 });
+    for (const m of [
+      [2, 0.5, 0, 2, 0.5, 0.5],
+      [2, 0, 0.5, 2, 0.5, 0.5],
+    ] as const) {
+      const { draw, calls } = recorder();
+      draw.transform(...m);
+      draw.text("a", 0, 0, { font });
+      expect(calls.find((c) => c.name === "setTransform")?.args).toEqual([m[0] * 5, m[1] * 5, m[2] * 7, m[3] * 7, 0.5, 0.5]);
+    }
+  });
+
   it("draws one quad per glyph on whole pixels, aligned", () => {
     const { draw, calls } = recorder();
     const font = new BitmapFont({ frames: grid(2), chars: "ab", widths: [3, 4] });

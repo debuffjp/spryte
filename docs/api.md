@@ -37,6 +37,11 @@ draw.dispose();                           // frees GPU objects and listeners; th
 | `text(text, x, y, options?)` | `font` (CSS string or `BitmapFont`), `color`, `align`, `baseline`, `alpha`. CSS text is rasterised once and cached (LRU, 256 entries). |
 | `measure(text, font?)` | Logical `{ w, h }` that `text()` fills. |
 
+Bitmap text snaps each glyph's final position to whole logical pixels after alignment, scale and translation,
+on both backends. Rotated or skewed glyphs keep their transformed positions. Before 0.12.2, only local positions
+were rounded: fractional parent translations could leave centred or right-aligned text between pixels. For
+those versions, round the final translation before calling `scale()` when laying out pixel text with `measure()`.
+
 **Interleaved data** (0.8+): set `each.stride` and `positions` becomes one record of `stride` floats per copy, uploaded as is. The `each` fields then take offsets into the record instead of arrays; `each.position` is the offset of x (default 0). `positions` must be a `Float32Array`, and it may view a `SharedArrayBuffer` that a worker writes. Colour at an offset is read as the record's bits there, so write it through a `Uint32Array` on the same buffer:
 
 ```ts

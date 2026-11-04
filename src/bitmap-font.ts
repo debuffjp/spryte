@@ -28,7 +28,8 @@ export interface Glyph {
 
 /**
  * A pixel font from a sprite sheet. Pass it as `font` to `draw.text` and `draw.measure`: glyphs land
- * on whole pixels, so it stays crisp at any integer scale.
+ * on whole logical pixels after scale and translation, so it stays crisp at any integer scale.
+ * Rotated or skewed glyphs keep their transformed positions. Before 0.12.2, only local positions were rounded.
  *
  * ```ts
  * // assets/font@6x9.png: glyphs on a 6×9 grid, exported from Aseprite

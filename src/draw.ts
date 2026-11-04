@@ -604,6 +604,11 @@ export class Draw {
         if (!g) continue;
         const f = g.frame;
         this.local(lx, ly, f.w, f.h);
+        if (this.tmp[1] === 0 && this.tmp[2] === 0) {
+          // A parent translation can reintroduce fractions after local alignment. Snap like pixel-art sprites.
+          this.tmp[4] = Math.round(this.tmp[4]);
+          this.tmp[5] = Math.round(this.tmp[5]);
+        }
         this.quads++;
         this.backend.quad(this.tmp, f.image, f.x, f.y, f.w, f.h, color, 0, false);
         lx += g.advance + font.spacing;

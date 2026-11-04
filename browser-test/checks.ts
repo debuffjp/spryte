@@ -2,6 +2,7 @@
 
 import { canvasFilters } from "../src/canvas2d.js";
 import {
+  BitmapFont,
   blur,
   brightness,
   contrast,
@@ -97,6 +98,28 @@ const record = (name: string, a: Uint8Array, b: Uint8Array) => {
   for (let i = 0; i < a.length; i += 4) if (a[i] !== 0x10 || a[i + 1] !== 0x20) nonBackground++;
   results.push({ name, differing: diff(a, b), nonBackground });
 };
+
+// Bitmap text must match rounding the final translation before scaling, including measure-based layout.
+{
+  const font = new BitmapFont({ frames: [{ image: img, x: 0, y: 0, w: 8, h: 6 }], chars: "a", widths: 8 });
+  for (const backend of ["webgl2", "2d"] as const) {
+    for (const scale of [1, 2]) {
+      for (const align of ["left", "center", "right"] as const) {
+        const scene = (rounded: boolean) => (draw: Draw) => {
+          const tx = align === "left" ? (79 - draw.measure("aa", font).w * 2) / 2 : 0.5;
+          draw.translate(rounded ? Math.round(tx) : tx, rounded ? 4 : 3.5);
+          draw.scale(2);
+          draw.text("aa\na", align === "left" ? 0 : 30, 12, { font, align, baseline: "middle" });
+        };
+        record(
+          `bitmap text ${align}, scale ${scale} (${backend})`,
+          await render(scene(false), backend, scale),
+          await render(scene(true), backend, scale),
+        );
+      }
+    }
+  }
+}
 
 for (const [name, o] of cases) {
   const scene = (bulk: boolean) => (draw: Draw) => {
