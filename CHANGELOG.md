@@ -1,5 +1,17 @@
 # spryte
 
+## 0.12.3
+
+### Patch Changes
+
+- ce6fe88: Warn once in development when `draw.sprites` gets `each.frame` frames from more than one image. Those copies draw one quad each instead of one instanced call, and before 0.12.3 nothing said so. Put the frames on one atlas to keep it one call.
+
+## 0.12.2
+
+### Patch Changes
+
+- d43cd3d: Snap bitmap glyphs to whole logical pixels after scale and translation, matching pixel-art sprites on WebGL2 and Canvas 2D. Before 0.12.2, only local positions were rounded, so centred or right-aligned text could land between pixels under a fractional parent translation. Rotated and skewed text keeps its transformed positions.
+
 ## 0.12.1
 
 ### Patch Changes
