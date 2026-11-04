@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canvas2DBackend } from "../src/canvas2d.js";
 import { Draw } from "../src/draw.js";
 import { mask } from "../src/mask.js";
+import { mesh } from "../src/mesh.js";
 
 function recordingContext() {
   const calls: { name: string; args: unknown[]; state: { alpha: number; fill: unknown; op: string } }[] = [];
@@ -11,7 +12,21 @@ function recordingContext() {
     globalCompositeOperation: "source-over",
     imageSmoothingEnabled: true,
   };
-  for (const name of ["setTransform", "fillRect", "drawImage", "clearRect", "save", "restore", "beginPath", "rect", "clip"]) {
+  for (const name of [
+    "setTransform",
+    "fillRect",
+    "drawImage",
+    "clearRect",
+    "save",
+    "restore",
+    "beginPath",
+    "rect",
+    "clip",
+    "moveTo",
+    "lineTo",
+    "closePath",
+    "transform",
+  ]) {
     ctx[name] = (...args: unknown[]) =>
       calls.push({
         name,
@@ -29,6 +44,24 @@ describe("Canvas2DBackend", () => {
     draw.begin("#11140d", 320, 180, 2);
     expect(calls[0]).toMatchObject({ name: "setTransform", args: [2, 0, 0, 2, 0, 0] });
     expect(calls[1]).toMatchObject({ name: "fillRect", args: [0, 0, 320, 180], state: { fill: "rgba(17,20,13,1)" } });
+  });
+
+  it("draws each mesh triangle clipped, through the affine map from its uvs to its vertices", () => {
+    const { ctx, calls } = recordingContext();
+    const draw = new Draw(new Canvas2DBackend(ctx), true);
+    draw.begin("#000", 100, 100, 1);
+    calls.length = 0;
+    const image = { width: 16, height: 16 } as unknown as HTMLImageElement;
+    // Vertices are the uvs doubled and moved by (5, 7).
+    mesh(draw, image, [5, 7, 37, 7, 5, 39, 37, 39], [0, 0, 16, 0, 0, 16, 16, 16], [0, 1, 2, 1, 3, 2]);
+    expect(calls.filter((c) => c.name === "clip")).toHaveLength(2);
+    const maps = calls.filter((c) => c.name === "transform").map((c) => c.args);
+    expect(maps).toEqual([
+      [2, 0, 0, 2, 5, 7],
+      [2, 0, 0, 2, 5, 7],
+    ]);
+    expect(calls.filter((c) => c.name === "drawImage")[0]?.args).toEqual([image, 0, 0, 16, 16, 0, 0, 16, 16]);
+    expect(calls.filter((c) => c.name === "save")).toHaveLength(calls.filter((c) => c.name === "restore").length);
   });
 
   it("draws rects as transformed unit squares with their colour", () => {

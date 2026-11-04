@@ -8,6 +8,13 @@ export interface RendererOptions {
   /** Linear filtering for images by default. Pass false for pixel art. Default true. */
   smooth?: boolean;
   /**
+   * Build mip levels for every image on upload, so smooth images drawn well below their size (zoomed-out maps,
+   * charts, thumbnails) stay steady instead of shimmering. Costs a third more GPU memory per image and a little
+   * upload time. Sprite sheets need a few pixels of padding between frames, or neighbours bleed in at small sizes.
+   * WebGL2 only: Canvas 2D ignores it. Pixel-art (`smooth: false`) draws are unaffected. Default false.
+   */
+  mipmaps?: boolean;
+  /**
    * See-through canvas: a clear colour with alpha (such as `"#0000"`) lets the page, or another canvas, show
    * through. For overlays, such as drawing particles over a PixiJS or DOM scene. Default false (opaque, which
    * lets the compositor skip blending).
@@ -35,7 +42,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
       premultipliedAlpha: true,
       powerPreference: "high-performance",
     });
-    if (gl) return new Draw(new WebGL2Backend(gl), options.smooth ?? true);
+    if (gl) return new Draw(new WebGL2Backend(gl, options.mipmaps), options.smooth ?? true);
     if (choice === "webgl2")
       throw new Error('spryte: WebGL2 is unavailable in this browser (use backend: "auto" to fall back to Canvas 2D)');
   }
@@ -63,6 +70,7 @@ function pending(ctx: CanvasRenderingContext2D): Backend {
     begin: noop,
     quad: noop,
     path: noop,
+    mesh: noop,
     quads: noop,
     copies: noop,
     setBlend: noop,

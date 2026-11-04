@@ -1,6 +1,6 @@
 # Contributing to spryte
 
-spryte is developed inside the [debuff monorepo](https://github.com/debuffjp/debuff) at `packages/spryte`, which is the canonical source, and mirrored to [debuffjp/spryte](https://github.com/debuffjp/spryte) with `git subtree split`. Open issues on either repo. Send code changes to debuff, so the games there keep testing every change.
+spryte is developed inside the [debuff monorepo](https://github.com/debuffjp/debuff) at `packages/spryte`, which is the canonical source, and copied to [debuffjp/spryte](https://github.com/debuffjp/spryte) by the release workflow whenever a new version ships (before 0.12.2 it was mirrored by hand with `git subtree split`). Open issues on either repo. Send code changes to debuff, so the games there keep testing every change.
 
 ```bash
 npm install

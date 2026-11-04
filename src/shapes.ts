@@ -301,6 +301,46 @@ export class ShapeBuffer {
     this.quad(base, base + 1, base + 2, base + 3);
   }
 
+  /** Textured triangles (see `Backend.mesh`), with `uv` already offset into the texture: `uv · (iu, iv) + (u0, v0)`. */
+  mesh(
+    m: Matrix,
+    xy: ArrayLike<number>,
+    uv: ArrayLike<number>,
+    indices: ArrayLike<number> | null,
+    icount: number,
+    u0: number,
+    v0: number,
+    iu: number,
+    iv: number,
+    color: number,
+    flash: number,
+    unit: number,
+  ): void {
+    const n = indices ? xy.length >> 1 : icount;
+    const base = this.reserve(n, icount);
+    const extra = 0xff | (Math.round(flash * 255) << 8) | (unit << 16);
+    const { f32, u32 } = this;
+    for (let i = 0; i < n; i++) {
+      const x = xy[i * 2] as number;
+      const y = xy[i * 2 + 1] as number;
+      const f = (base + i) * 6;
+      f32[f] = m[0] * x + m[2] * y + m[4];
+      f32[f + 1] = m[1] * x + m[3] * y + m[5];
+      f32[f + 2] = u0 + (uv[i * 2] as number) * iu;
+      f32[f + 3] = v0 + (uv[i * 2 + 1] as number) * iv;
+      u32[f + 4] = color;
+      u32[f + 5] = extra;
+    }
+    this.count += n;
+    const k = this.icount;
+    for (let i = 0; i < icount; i++) {
+      const v = indices ? (indices[i] as number) : i;
+      if (!(v >= 0 && v < n)) throw new Error(`spryte: mesh index ${v} is out of range (${n} vertices)`);
+      this.indices[k + i] = base + v;
+    }
+    this.icount = k + icount;
+  }
+
   private vertex(x: number, y: number, coverage: number): void {
     const m = this.m;
     const f = this.count * 6;

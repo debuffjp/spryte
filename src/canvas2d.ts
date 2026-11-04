@@ -126,6 +126,86 @@ export class Canvas2DBackend implements Backend {
     }
   }
 
+  mesh(
+    m: Matrix,
+    src: TextureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    xy: ArrayLike<number>,
+    uv: ArrayLike<number>,
+    indices: ArrayLike<number> | null,
+    icount: number,
+    color: number,
+    flash: number,
+    smooth: boolean,
+  ): void {
+    if (src === this.target) throw new Error("spryte: can't draw a render target into itself");
+    const ctx = this.ctx;
+    const s = this.scale;
+    if (this.smoothing !== smooth) {
+      ctx.imageSmoothingEnabled = smooth;
+      this.smoothing = smooth;
+    }
+    const image = src instanceof RenderTarget ? this.surface(src) : src;
+    const rgb = color >>> 8;
+    const plain = rgb === 0xffffff && !(flash > 0);
+    const tex = plain ? image : this.shaded(image, src instanceof RenderTarget, sx, sy, sw, sh, rgb, flash);
+    // Each clipped triangle grows by half a device pixel, so shared edges overlap instead of showing a gap.
+    const pad = 0.5 / (s * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1);
+    const n = xy.length >> 1;
+    for (let t = 0; t + 2 < icount; t += 3) {
+      const i0 = indices ? (indices[t] as number) : t;
+      const i1 = indices ? (indices[t + 1] as number) : t + 1;
+      const i2 = indices ? (indices[t + 2] as number) : t + 2;
+      if (!(i0 >= 0 && i0 < n && i1 >= 0 && i1 < n && i2 >= 0 && i2 < n))
+        throw new Error(`spryte: mesh index out of range in triangle ${t / 3} (${n} vertices)`);
+      const x0 = xy[i0 * 2] as number;
+      const y0 = xy[i0 * 2 + 1] as number;
+      const x1 = xy[i1 * 2] as number;
+      const y1 = xy[i1 * 2 + 1] as number;
+      const x2 = xy[i2 * 2] as number;
+      const y2 = xy[i2 * 2 + 1] as number;
+      const u0 = uv[i0 * 2] as number;
+      const v0 = uv[i0 * 2 + 1] as number;
+      const u1 = uv[i1 * 2] as number;
+      const v1 = uv[i1 * 2 + 1] as number;
+      const u2 = uv[i2 * 2] as number;
+      const v2 = uv[i2 * 2 + 1] as number;
+      // The affine map from source pixels to local units that takes each uv to its vertex.
+      const du1 = u1 - u0;
+      const dv1 = v1 - v0;
+      const du2 = u2 - u0;
+      const dv2 = v2 - v0;
+      const det = du1 * dv2 - du2 * dv1;
+      if (det === 0) continue;
+      const dx1 = x1 - x0;
+      const dy1 = y1 - y0;
+      const dx2 = x2 - x0;
+      const dy2 = y2 - y0;
+      const a = (dx1 * dv2 - dx2 * dv1) / det;
+      const b = (dy1 * dv2 - dy2 * dv1) / det;
+      const c = (dx2 * du1 - dx1 * du2) / det;
+      const d = (dy2 * du1 - dy1 * du2) / det;
+      const cx = (x0 + x1 + x2) / 3;
+      const cy = (y0 + y1 + y2) / 3;
+      ctx.save();
+      ctx.setTransform(m[0] * s, m[1] * s, m[2] * s, m[3] * s, m[4] * s, m[5] * s);
+      ctx.beginPath();
+      grow(ctx, x0, y0, cx, cy, pad, true);
+      grow(ctx, x1, y1, cx, cy, pad, false);
+      grow(ctx, x2, y2, cx, cy, pad, false);
+      ctx.closePath();
+      ctx.clip();
+      ctx.transform(a, b, c, d, x0 - a * u0 - c * v0, y0 - b * u0 - d * v0);
+      ctx.globalAlpha = (color & 0xff) / 255;
+      if (plain) ctx.drawImage(tex, sx, sy, sw, sh, 0, 0, sw, sh);
+      else ctx.drawImage(tex, 0, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+    }
+  }
+
   path(m: Matrix, points: ArrayLike<number>, n: number, closed: boolean, width: number, color: number): void {
     if (n < 2) return;
     const ctx = this.ctx;
@@ -359,3 +439,12 @@ const COMPOSITE: Record<BlendMode | "mask", GlobalCompositeOperation> = {
   erase: "destination-out",
   mask: "destination-in",
 };
+
+/** A path point at (`x`, `y`) moved `pad` further from (`cx`, `cy`). */
+function grow(ctx: CanvasRenderingContext2D, x: number, y: number, cx: number, cy: number, pad: number, first: boolean): void {
+  const len = Math.hypot(x - cx, y - cy) || 1;
+  const px = x + ((x - cx) / len) * pad;
+  const py = y + ((y - cy) / len) * pad;
+  if (first) ctx.moveTo(px, py);
+  else ctx.lineTo(px, py);
+}

@@ -1,5 +1,49 @@
 # spryte
 
+## 0.12.1
+
+### Patch Changes
+
+- c9a0a2e: `draw.sprites` warns once per renderer when an array it gets is detached, which happens to a view of wasm memory after that memory grows. Before, it drew nothing with no message. The docs now say to recreate such views after growth or each frame.
+
+## 0.12.0
+
+### Minor Changes
+
+- 3faf45c: New `mesh(draw, frame, vertices, uvs, indices?, options?)`: draw an image stretched over triangles you place, for trails, ropes, waving flags and bent sprites. UVs are in source pixels from the frame's top-left, so atlas frames work. On WebGL2 meshes join the shape batch (one draw call with the shapes and sprites around them), and a two-triangle mesh over a frame matches `draw.sprite` pixel for pixel. Canvas 2D clips and draws each triangle, which is slower and can show faint lines along shared edges. It's a separate import: 1.6 kB brotli for apps that use it (0.1 kB if they already draw shapes), 0.08 kB for apps that don't.
+- 55660ca: New `mipmaps` option for `createRenderer`: build mip levels for every uploaded image, so smooth images drawn well below their size (zoomed-out maps, charts, thumbnails) stay steady instead of shimmering. Off by default; costs a third more GPU memory per image. Render targets, borrowed host textures and `smooth: false` draws are unaffected.
+
+## 0.11.0
+
+### Minor Changes
+
+- b17a196: Static layers: `draw.record(fn)` keeps the sprites `fn` draws in a `Layer` without drawing them, and `draw.replay(layer)` draws them all again under the current transform. On WebGL2 a replay is one draw call per eight images, with the instances in a GPU buffer made once, so a tilemap or background costs no JavaScript per sprite. It puts the same pixels on screen as drawing the sprites one by one, pixel snapping included at fractional camera offsets and zoom (checked on a real GPU against direct drawing on both backends). `draw.alpha` applies at replay. On Canvas 2D, under a custom shader or `draw.alpha` below 1, replay draws the sprites one by one. After a context loss the layer's buffers are rebuilt; `layer.dispose()` frees them.
+
+## 0.10.0
+
+### Minor Changes
+
+- e44fbbc: Custom shaders get `frameUv()`: the position inside the drawn frame, from (0, 0) at the top left to (1, 1) at the bottom right. `uv` stays in atlas space, so effects shaped to a sprite no longer need the frame's atlas rect passed as a uniform. `@debuffjp/core` now re-exports the `Shader` and `UniformValue` types.
+
+## 0.9.0
+
+### Minor Changes
+
+- 0403e36: `drawElement` (experimental): draw a live DOM element (a menu, a text field, rich text) inside the canvas, through spryte's transforms and shaders, with Chrome's HTML-in-Canvas API (Chrome and Edge 157 and later). The element keeps clicks, focus, typing, text selection and screen readers where it's drawn. It returns false, drawing nothing, where the API is missing, so the element stays in the page. `canDrawElements()` reports support. Guide: https://debuff.jp/spryte/html-in-canvas
+
+## 0.8.0
+
+### Minor Changes
+
+- cc3125d: New `gpuTimer(draw)`: GPU milliseconds for what you draw between its `begin()` and `end()`, to tell a GPU-bound frame from a CPU-bound one. Results arrive a few frames late and never block. `ms` stays `undefined` where timing isn't available (Canvas 2D, and browsers without `EXT_disjoint_timer_query_webgl2`, which in practice means everything but Chromium on desktop), after a GPU timing glitch, and when a host engine or profiler is already timing the frame. Separately imported, so it adds nothing unless used.
+- c3669d4: `draw.sprites()` takes interleaved data. Set `each.stride` and `positions` becomes one record of `stride` floats per copy, uploaded to the GPU as is; `each.scale`, `rotation`, `color` and `frame` then take offsets into the record. `positions` must be a `Float32Array` and may view a `SharedArrayBuffer`, so a worker's buffer draws without a per-frame copy.
+  
+  `sprites()` inside `withShader` now stays one instanced draw instead of one quad per copy: the effect is compiled against the per-copy program. Only `source(uv)`, `color` and `uv` are guaranteed inside `effect` there. Frames across images still draw one quad per copy.
+
+### Patch Changes
+
+- 56749bb: Canvas 2D fallback: tinted sprites in more than 256 colours no longer slow to seconds per frame. The cache of recoloured copies used to clear completely at 256 entries, so animated or per-copy colours re-tinted nearly every sprite every frame; it now drops the least recently used entry and holds up to 1,024 per image. Repeating the last tint also skips the cache lookup. Output is unchanged. Measured in headless Chrome: 6,000 copies in 1,000 colours went from 2.2 s to 36 ms per frame, and 60,000 copies in one colour from 212 to about 180 ms.
+
 ## 0.7.3
 
 ### Patch Changes

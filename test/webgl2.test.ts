@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Matrix, TextureSource } from "../src/backend.js";
 import { Draw } from "../src/draw.js";
 import { blur, filter } from "../src/filters.js";
+import { mesh } from "../src/mesh.js";
 import { Shader } from "../src/shader.js";
 import { ring, roundRect } from "../src/shapes.js";
+import { RenderTarget } from "../src/target.js";
 import { WebGL2Backend } from "../src/webgl2.js";
 
 /**
@@ -77,6 +79,59 @@ describe("WebGL2Backend", () => {
     expect(count("drawArraysInstanced")).toBe(1);
     const samplers = calls.filter((c) => c.name === "bindSampler").map((c) => c.args[0]);
     expect(samplers).toEqual([0, 1]);
+  });
+
+  it("builds mip levels only when asked, and samples them only for smooth draws of uploaded images", () => {
+    const plain = fakeGL();
+    const off = new WebGL2Backend(plain.gl);
+    off.begin(0x000000ff, 100, 50, 1);
+    off.quad(M, image(), 0, 0, 16, 16, 0xffffffff, 0, true);
+    off.end();
+    expect(plain.count("generateMipmap")).toBe(0);
+
+    const { gl, calls, created, count } = fakeGL();
+    const be = new WebGL2Backend(gl, true);
+    const [nearest, linear, trilinear] = created.filter((o) => o.kind === "Sampler");
+    const img = image();
+    const target = new RenderTarget(8, 8);
+    be.begin(0x000000ff, 100, 50, 1);
+    be.quad(M, img, 0, 0, 16, 16, 0xffffffff, 0, true);
+    be.quad(M, img, 0, 0, 16, 16, 0xffffffff, 0, false);
+    // A render target has no mip levels: trilinear sampling would make it incomplete (black).
+    be.quad(M, target, 0, 0, 8, 8, 0xffffffff, 0, true);
+    be.end();
+    expect(count("generateMipmap")).toBe(1);
+    const bound = calls.filter((c) => c.name === "bindSampler").map((c) => c.args[1]);
+    expect(bound).toEqual([trilinear, nearest, linear]);
+  });
+
+  it("draws a mesh as indexed triangles in the shape batch, with uvs offset into an atlas frame", () => {
+    const { gl, calls, count } = fakeGL();
+    const be = new WebGL2Backend(gl);
+    const draw = new Draw(be, true);
+    const atlas = image(64, 32);
+    draw.begin("#000", 100, 50, 1);
+    mesh(draw, { image: atlas, x: 32, y: 0, w: 32, h: 32 }, [0, 0, 10, 0, 0, 10, 10, 10], [0, 0, 32, 0, 0, 32, 32, 32], [0, 1, 2, 1, 3, 2]);
+    // A sprite after a mesh joins its batch.
+    draw.sprite(atlas, 50, 25);
+    draw.end();
+    expect(count("drawElements")).toBe(1);
+    expect(count("drawArraysInstanced")).toBe(0);
+    const uploads = calls.filter((c) => c.name === "bufferData");
+    const indices = uploads.at(-1)?.args[1] as Uint32Array;
+    expect([...indices.subarray(0, 6)]).toEqual([0, 1, 2, 1, 3, 2]);
+    const verts = uploads.at(-2)?.args[1] as Float32Array;
+    // Vertex 3: position (10, 10), uv at the frame's bottom-right: (32 + 32) / 64, 32 / 32.
+    expect([...verts.subarray(18, 22)]).toEqual([10, 10, 1, 1]);
+    // Vertex 0: the frame's top-left is halfway across the atlas.
+    expect([...verts.subarray(0, 4)]).toEqual([0, 0, 0.5, 0]);
+  });
+
+  it("rejects mesh indices outside the vertices", () => {
+    const { gl } = fakeGL();
+    const draw = new Draw(new WebGL2Backend(gl), true);
+    draw.begin("#000", 100, 50, 1);
+    expect(() => mesh(draw, image(), [0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 1], [0, 1, 3])).toThrow(/out of range/);
   });
 
   it("splits batches when more than 8 textures are in flight, and counts draw calls", () => {
@@ -245,6 +300,25 @@ describe("WebGL2Backend", () => {
       // Flushing the shapes frees their texture units; the sprite's unit must outlive that.
       const info = calls.findLast((c) => c.name === "uniform3fv")?.args[1] as Float32Array;
       expect(info[0]).toBe(1 / 16);
+    });
+
+    it("give a custom shader frameUv() in every program it compiles into", () => {
+      const { gl, shaderSources } = fakeGL();
+      const draw = new Draw(new WebGL2Backend(gl), false);
+      const local = new Shader("vec4 effect(vec4 color, vec2 uv) { return vec4(frameUv(), 0.0, 1.0); }");
+      draw.begin("#000", 100, 50, 1);
+      draw.withShader(local, () => {
+        draw.sprite(image(), 10, 10);
+        draw.sprites(image(), new Float32Array([1, 2, 3, 4]), 2);
+        roundRect(draw, 0, 0, 20, 20, 4, "#e23");
+      });
+      draw.end();
+      // Sources arrive as vertex, fragment pairs. A fragment that reads v_local needs a vertex stage that writes it.
+      for (let i = 0; i < shaderSources.length; i += 2) {
+        if (!shaderSources[i + 1]?.includes("in highp vec2 v_local")) continue;
+        expect(shaderSources[i]).toMatch(/out highp vec2 v_local;[\s\S]*v_local = /);
+      }
+      expect(shaderSources.filter((s) => s.includes("frameUv()")).length).toBeGreaterThanOrEqual(2);
     });
 
     it("write the same instance on the short path as on the full one", () => {

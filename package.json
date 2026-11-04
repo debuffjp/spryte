@@ -1,6 +1,6 @@
 {
   "name": "spryte",
-  "version": "0.7.3",
+  "version": "0.12.1",
   "description": "Blazing fast 2D renderer for the web: 2-4x faster than the most popular one, at about a seventh of its size. Verified in an open benchmark.",
   "keywords": [
     "2d",
@@ -20,7 +20,8 @@
   "bugs": "https://github.com/debuffjp/spryte/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/debuffjp/spryte.git"
+    "url": "git+https://github.com/debuffjp/debuff.git",
+    "directory": "packages/spryte"
   },
   "type": "module",
   "sideEffects": false,
@@ -55,6 +56,11 @@
     "example:phaser": "vite examples/phaser",
     "test:phaser": "node examples/phaser/check.mjs",
     "example:pixi": "vite examples/pixi",
+    "example:hemoglobin": "vite examples/hemoglobin",
+    "example:ribosome": "vite examples/ribosome",
+    "example:jupiter": "vite examples/jupiter",
+    "example:html": "vite examples/html-in-canvas",
+    "example:mesh": "vite examples/mesh",
     "test:pixi": "node examples/pixi/check.mjs",
     "test:browser": "node browser-test/run.mjs"
   },
@@ -65,7 +71,7 @@
     "happy-dom": "^21.0.3",
     "playwright-core": "1.64.1",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4",
+    "vite": "^8.3.5",
     "vitest": "^5.0.5"
   }
 }

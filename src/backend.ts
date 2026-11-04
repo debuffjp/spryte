@@ -21,6 +21,7 @@ export type RawContext = { kind: "webgl2"; gl: WebGL2RenderingContext } | { kind
 
 import type { CopySpec } from "./copies.js";
 import type { Frame, SpriteDrawOptions } from "./draw.js";
+import type { Layer } from "./layer.js";
 import type { Shader } from "./shader.js";
 import type { ShapeBuffer } from "./shapes.js";
 import type { RenderTarget } from "./target.js";
@@ -84,6 +85,11 @@ export interface Backend {
    * pixels, as `Draw` rounds it for `quad`. Without it, `Draw` calls `quad`.
    */
   sprite?(ver: number, m: Matrix, f: Frame, x: number, y: number, o: SpriteDrawOptions, color: number, smooth: boolean): void;
+  /**
+   * Draw a recorded layer under `m`, matching what drawing its sprites one by one would put on screen. Return
+   * false to have `Draw` do exactly that instead (the layer holds something this backend can't replay).
+   */
+  replay?(layer: Layer, m: Matrix): boolean;
   /** Copies of one frame with per-copy scale, rotation or colour (`draw.sprites` with `each`). */
   copies(spec: CopySpec): void;
   /**
@@ -100,6 +106,28 @@ export interface Backend {
     color: number,
     aa: number,
     tessellator: new () => ShapeBuffer,
+  ): void;
+  /**
+   * Indexed triangles textured from `src`: `xy` holds `x, y` pairs in the units `m` maps to logical space, `uv`
+   * matching pairs in source pixels from (`sx`, `sy`), and `indices` (null: 0, 1, 2, …) the first `icount`
+   * vertex numbers, three per triangle. `sw, sh` is the frame's size. The triangle buffer comes from the shape
+   * functions, like `path`'s tessellator.
+   */
+  mesh(
+    m: Matrix,
+    src: TextureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    xy: ArrayLike<number>,
+    uv: ArrayLike<number>,
+    indices: ArrayLike<number> | null,
+    icount: number,
+    color: number,
+    flash: number,
+    smooth: boolean,
+    triangles: new () => ShapeBuffer,
   ): void;
   /** `mask` (internal, for `mask()`) keeps what's there in proportion to the source's alpha. */
   setBlend(mode: BlendMode | "mask"): void;
@@ -122,6 +150,8 @@ export interface Backend {
   resize(backingWidth: number, backingHeight: number): void;
   /** Drop cached GPU data for a source whose pixels changed. */
   invalidate(src: TextureSource): void;
+  /** Draw `key` from a texture spryte didn't create (top row first), which it samples but never uploads to or deletes. */
+  lend?(key: TextureSource, tex: WebGLTexture, w: number, h: number): void;
   /**
    * Copy `w × h` pixels of `from` into `dst` at (`x`, `y`), where `dst` (a canvas this backend may hold as a
    * texture) has already been updated the same way. Lets a texture atlas upload one new region instead of

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ribosome: a spryte demo</title>
+    <meta name="description" content="A bacterial ribosome (PDB 7N1P), about 150,000 atoms, each one sprite, reading mRNA and building a protein one amino acid at a time. Drawn with spryte." />
+    <link rel="icon" href="https://debuff.jp/spryte/icon.svg" />
+    <style>
+      :root {
+        --bg: #0d0f0a;
+        --soft: #1f2617;
+        --text: #e8ecdf;
+        --text-2: #a3ab96;
+        --text-3: #6b7360;
+        --lime: #cffb2d;
+        --ink: #11140d;
+      }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text-2); font: 14px/1.45 system-ui, sans-serif; overscroll-behavior: none; }
+      body { display: flex; flex-direction: column; }
+      a { color: var(--text-2); }
+      header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 14px 20px 8px; }
+      .brand { display: flex; gap: 8px; align-items: center; color: var(--text); text-decoration: none; font-weight: 700; }
+      .brand img { width: 24px; height: 24px; }
+      h1 { font-size: 17px; margin: 0; color: var(--text); font-weight: 700; }
+      .group { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; gap: 4px; align-items: center; }
+      .group span { color: var(--text-3); margin-right: 4px; font-size: 12px; }
+      button { font: inherit; font-size: 13px; font-weight: 600; color: var(--text-2); background: var(--soft); border: 0; border-radius: 999px; padding: 5px 13px; cursor: pointer; transition: transform 0.12s; }
+      button:hover { transform: translateY(-1px); color: var(--text); }
+      button[aria-pressed="true"] { color: var(--ink); background: var(--lime); }
+      button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+      #caption { padding: 0 20px; color: var(--text); max-width: 80ch; }
+      #stats { padding: 2px 20px 0; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; min-height: 1.45em; }
+      #stage { position: relative; flex: 1; min-height: 0; margin: 8px 20px 0; border-radius: 20px; background: var(--ink); overflow: hidden; touch-action: none; cursor: grab; }
+      #stage:active { cursor: grabbing; }
+      #slab { border: 0; margin: 0; min-width: 0; position: absolute; top: 12px; right: 12px; z-index: 1; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; padding: 10px 14px; border-radius: 14px; background: color-mix(in srgb, var(--soft) 88%, transparent); font-size: 12px; }
+      #slab strong { grid-column: 1 / -1; color: var(--text); font-size: 12px; }
+      #slab input { accent-color: var(--lime); width: 130px; }
+      #slab button { grid-column: 1 / -1; justify-self: start; font-size: 12px; padding: 3px 10px; }
+      canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      footer { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 20px 12px; color: var(--text-3); font-size: 12px; }
+      @media (max-width: 600px) {
+        header { padding: 10px 12px 6px; }
+        #caption, #stats, footer { padding-left: 12px; padding-right: 12px; }
+        #stage { margin: 6px 12px 0; border-radius: 14px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="https://debuff.jp/spryte/"><img src="https://debuff.jp/spryte/icon.svg" alt="" />spryte</a>
+      <h1>ribosome</h1>
+      <fieldset class="group" id="modes" aria-label="Colour by">
+        <span>colour</span>
+        <button type="button" data-mode="translation">Translation</button>
+        <button type="button" data-mode="subunits">Subunits</button>
+        <button type="button" data-mode="element">Element</button>
+      </fieldset>
+      <fieldset class="group" id="backends" aria-label="Renderer">
+        <span>renderer</span>
+        <button type="button" data-backend="auto">WebGL2</button>
+        <button type="button" data-backend="2d">Canvas 2D</button>
+      </fieldset>
+      <button type="button" id="pause" aria-pressed="false">Pause</button>
+    </header>
+    <div id="caption"></div>
+    <div id="stats"></div>
+    <div id="stage">
+      <fieldset id="slab" aria-label="Slab">
+        <strong>slab</strong>
+        <label for="front">front</label><input type="range" id="front" min="0" max="1" step="0.01" value="1" />
+        <label for="back">back</label><input type="range" id="back" min="0" max="1" step="0.01" value="0" />
+        <button type="button" id="whole">Whole molecule</button>
+      </fieldset>
+    </div>
+    <footer>
+      <span>pull the slab ends together to cut a slice · drag to turn, scroll or pinch to zoom · keys 1-3 switch colours</span>
+      <span>Structure: 7N1P, E. coli 70S ribosome in a pre-translocation state, from the RCSB Protein Data Bank. The motion is a keyframed sketch of one elongation cycle, not a simulation.</span>
+      <span>More simulations: <a href="../flock/">flock</a> · <a href="../ants/">ant colony</a> · <a href="../hemoglobin/">hemoglobin</a> · <a href="../jupiter/">jupiter</a></span>
+      <a href="https://github.com/debuffjp/debuff/tree/main/packages/spryte/examples/ribosome">source</a>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -447,3 +447,36 @@ describe("mask", () => {
     expect(views.filter(([w, h]) => w === 100 && h === 50)).toHaveLength(0);
   });
 });
+
+describe("sprites with a detached array", () => {
+  const detached = () => {
+    const a = new Float32Array(new ArrayBuffer(16));
+    structuredClone(a.buffer, { transfer: [a.buffer] });
+    return a;
+  };
+  const image = {} as TextureSource;
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("warns once per renderer and draws nothing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { draw, quads } = recorder();
+    draw.sprites(image, detached());
+    draw.sprites(image, detached());
+    expect(quads).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/detached/);
+  });
+
+  it("warns for a detached array in each", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    recorder().draw.sprites(image, new Float32Array(4), 2, {}, { scale: detached() });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays quiet for an empty array", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    recorder().draw.sprites(image, new Float32Array(0));
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

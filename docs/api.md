@@ -8,6 +8,7 @@ Everything is exported from `spryte`. Units are **logical**: you choose them in 
 | --- | --- | --- |
 | `backend` | `"auto"` | `"auto"`: WebGL2, falling back to Canvas 2D. `"webgl2"`: throws if WebGL2 is unavailable. `"2d"`: always Canvas 2D. |
 | `smooth` | `true` | Default image filtering. Use `false` for pixel art. Can be overridden per sprite. |
+| `mipmaps` | `false` | Build mip levels for each image on upload, so smooth images drawn well below their size (zoomed-out maps, charts, thumbnails) stay steady instead of shimmering. Costs a third more GPU memory per image. Pad sprite-sheet frames by a few pixels, or neighbours bleed in at small sizes. WebGL2 only; `smooth: false` draws and render targets are unaffected. Added in 0.12.0. |
 | `transparent` | `false` | See-through canvas: clear with an alpha colour (`"#0000"`) to draw over the page or another canvas, such as particles over a PixiJS scene. Opaque is slightly cheaper for the compositor. |
 
 The Canvas 2D backend is a separate chunk, loaded only on fallback. Until it arrives (a few milliseconds), frames draw nothing.
@@ -45,6 +46,8 @@ const bits = new Uint32Array(data.buffer);
 draw.sprites(dot, data, n, {}, { stride: 4, scale: 2, color: 3 });
 ```
 
+`sprites` reads its arrays during the call and doesn't keep them. A view of wasm memory detaches when that memory grows (unless the memory is shared), and a detached array has length 0, so nothing draws. Recreate the view after growth, or each frame. From 0.12.1 spryte warns once per renderer in browsers that report `ArrayBuffer.prototype.detached`; before, it drew nothing with no message.
+
 `count` is clamped to whole records, and an offset without `stride` throws.
 
 **Colours** are CSS hex strings (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), numbers `0xRRGGBBAA`, or any CSS colour (resolved once through a canvas, then cached).
@@ -68,7 +71,7 @@ draw.sprites(dot, data, n, {}, { stride: 4, scale: 2, color: 3 });
 Imported functions that take the `Draw`, so an app only ships the ones it uses (startup stays at spryte's core size otherwise):
 
 ```ts
-import { blur, filter, mask, nineSlice, roundRect } from "spryte";
+import { blur, filter, mask, mesh, nineSlice, roundRect } from "spryte";
 roundRect(draw, 8, 8, 120, 40, 6, "#222c");
 ```
 
@@ -78,10 +81,34 @@ roundRect(draw, 8, 8, 120, 40, 6, "#222c");
 | `polyline(draw, points, width, color, closed?, count?)` | Antialiased line through the points, mitred joins, flat ends. Lines under a pixel fade rather than vanish. |
 | `roundRect(draw, x, y, w, h, radius, color, lineWidth?)` | Rounded rectangle, filled or (with `lineWidth`) outlined. |
 | `ring(draw, x, y, radius, width, color)` | Circle outline. |
+| `mesh(draw, frame, vertices, uvs, indices?, options?)` | An image stretched over triangles (0.12+): trails, ropes, flags, bent sprites. `vertices` are `x, y` pairs in the current transform's units, `uvs` matching pairs in source pixels from the frame's top-left, `indices` three vertex numbers per triangle (default: every three vertices). Joins the shape batch on WebGL2; custom shaders don't apply. Canvas 2D draws each triangle clipped, with faint lines possible along shared edges. Options: `tint`, `alpha`, `flash`, `smooth`. |
 | `nineSlice(draw, frame, x, y, w, h, insets, options?)` | UI panel: corners keep their size (`insets` in source pixels, one number or `[l, t, r, b]`), edges and centre stretch. Nine quads. Options: `tint`, `alpha`, `flash`, `smooth`. |
 | `tiled(draw, frame, x, y, w, h, options?)` | Fill a box with a repeating frame (works inside atlases). Options add `offsetX`, `offsetY` (scroll, wraps) and `scale`. One quad per visible tile. |
 | `mask(draw, shape, fn)` | Keep what `fn` draws only where `shape` draws (soft edges use the shape's alpha). Same units, transform and clips as outside; nests; works inside `into()`. Two offscreen passes at the destination's size, so mask groups, not single sprites. |
 | `filter(draw, filters, fn)` | Draw `fn` through filters in order: `blur(radius)`, `grayscale()`, `sepia()`, `saturate()`, `hueRotate()`, `brightness()`, `contrast()`, `invert()` (all on both backends, matching CSS filters) and `colorMatrix(m)` (WebGL2 only). Glow: blur an additive copy, then draw the sharp one. On the Canvas 2D fallback, filters use `ctx.filter`: browsers that ignore it (Safari before 18) draw unfiltered, with a warning. |
+
+## Static layers (0.11+)
+
+For sprites that don't change from frame to frame, such as a tilemap, a background or a level's scenery: record them once, then replay them each frame under the camera. On WebGL2 a replay is one draw call per eight images the layer uses, with no JavaScript work per sprite.
+
+```ts
+const ground = draw.record((d) => {
+  for (const t of map.tiles) d.sprite(tileFrames[t.id], t.x * 16, t.y * 16, { origin: [0, 0] });
+});
+
+// each frame:
+draw.withCamera(camera, () => draw.replay(ground));
+
+// when the map changes, or you're done with it:
+ground.dispose();
+```
+
+- Inside `record()`, `draw.sprite` with any options is recorded (plus `push`, `translate`, `pop` and other transforms), in the layer's own coordinates. Nothing is drawn. Other drawing calls throw.
+- `replay()` draws under the current transform, clip and blend mode, and puts the same pixels on screen as drawing the sprites one by one there, pixel snapping included at fractional camera offsets and zoom. That's checked on a real GPU by `npm run test:browser` on both backends.
+- `draw.alpha` applies at replay, not when recording. Under `draw.alpha` below 1, a custom shader (`withShader`), a recording made under scale or rotation, or the Canvas 2D backend, `replay()` draws the sprites one by one instead: the same pixels, without the saving.
+- A layer holds the images it was recorded with. To change a tile, record the layer again. Animated tiles aren't covered yet: draw them on top with `sprite()`.
+- After a WebGL context loss, the layer's GPU buffers are rebuilt on the next replay. `layer.dispose()` frees them; replaying afterwards builds them again.
+- A render target can do the same job (draw the layer into a target once, then draw the target), but it costs width × height × 4 bytes, can't be larger than `MAX_TEXTURE_SIZE`, and resamples under zoom. A layer has none of those limits.
 
 ## Render targets
 
@@ -119,10 +146,11 @@ draw.withShader(wave, () => draw.sprite(hero, x, y));
 ```
 
 - `color` is the draw's tint times alpha, premultiplied. Flash is applied after your effect.
+- `uv` is in texture (atlas) space. `frameUv()` gives the position inside the drawn frame, (0, 0) top left to (1, 1) bottom right; shapes get (0, 0). Since 0.10; before that, pass the frame's atlas rect as a uniform.
 - Shaders compile on first use. Errors throw with the driver's message, and line numbers refer to your source. A shader that fails to compile leaves the renderer as it was, and using it again throws again.
 - `set()` affects only draws made after it, even inside the same scope.
 - Shaders compose with render targets: draw into a target, then draw the target through a shader for full-screen post-processing.
-- `sprites()` inside `withShader` stays one instanced draw: spryte compiles your effect a second time against its per-copy program. Inside `effect`, only `source(uv)`, `color` and `uv` are guaranteed there. Frames across images still draw one quad per copy. Before 0.8, `sprites()` inside `withShader` always fell back to one quad per copy, which was correct but without the bulk speed-up.
+- `sprites()` inside `withShader` stays one instanced draw: spryte compiles your effect a second time against its per-copy program. Inside `effect`, only `source(uv)`, `color`, `uv` and `frameUv()` are guaranteed there. Frames across images still draw one quad per copy. Before 0.8, `sprites()` inside `withShader` always fell back to one quad per copy, which was correct but without the bulk speed-up.
 
 ## Inside another engine: createSharedRenderer(gl, options?)
 

@@ -6,9 +6,9 @@
 
 ![Most sprites each library holds at 60 fps, per 2dbench scene](https://debuff.jp/charts/max-at-60fps.svg)
 
-You draw in immediate mode (sprites, bulk sprites, nine-slice panels, tiled fills, shapes and strokes, text, clips, masks, blend modes, filters, render targets and custom shaders), and spryte batches it onto WebGL2 with instancing, falling back to Canvas 2D automatically. No dependencies, no scene graph, no game framework.
+You draw in immediate mode (sprites, bulk sprites, meshes, nine-slice panels, tiled fills, shapes and strokes, text, clips, masks, blend modes, filters, render targets and custom shaders), and spryte batches it onto WebGL2 with instancing, falling back to Canvas 2D automatically. No dependencies, no scene graph, no game framework.
 
-> **Alpha.** spryte is the renderer inside [debuff](https://debuff.jp), where games already run on it. The API may still change before 1.0. It's measured on desktop Chrome and Chromium (Windows and Linux; NVIDIA and AMD GPUs), iPhone Safari and Chrome, and Firefox on Android, and its one-call-per-sprite path is ahead of PixiJS on every device so far ([results across devices](https://github.com/debuffjp/2dbench#across-devices)). Safari on macOS isn't covered yet: [run 2dbench on your device](https://debuffjp.github.io/2dbench/mobile.html) to help.
+> **Alpha.** spryte is the renderer inside [debuff](https://debuff.jp), where games already run on it. The API may still change before 1.0. It's measured on desktop Chrome and Chromium (Windows, Linux and macOS; NVIDIA, AMD and Apple GPUs), iPhone Safari and Chrome, and Firefox on Android, and its one-call-per-sprite path is ahead of PixiJS on every device so far ([results across devices](https://github.com/debuffjp/2dbench#across-devices)). Safari on macOS isn't covered yet: [run 2dbench on your device](https://debuffjp.github.io/2dbench/mobile.html) to help.
 
 ```bash
 npm install spryte
@@ -77,7 +77,7 @@ draw.withShader(crt, () => draw.sprite(scene, 0, 0, { origin: [0, 0] }));
 
 ## Docs
 
-- **Guides on debuff.jp:** [getting started](https://debuff.jp/spryte/getting-started), [sprites and frames](https://debuff.jp/spryte/sprites), [bulk sprites and particles](https://debuff.jp/spryte/bulk-sprites), [shapes and text](https://debuff.jp/spryte/shapes-and-text), [transforms and clipping](https://debuff.jp/spryte/transforms-and-clipping), [render targets and shaders](https://debuff.jp/spryte/render-targets-and-shaders), [pixel art](https://debuff.jp/spryte/pixel-art)
+- **Guides on debuff.jp:** [getting started](https://debuff.jp/spryte/getting-started), [sprites and frames](https://debuff.jp/spryte/sprites), [bulk sprites and particles](https://debuff.jp/spryte/bulk-sprites), [shapes and text](https://debuff.jp/spryte/shapes-and-text), [transforms and clipping](https://debuff.jp/spryte/transforms-and-clipping), [render targets and shaders](https://debuff.jp/spryte/render-targets-and-shaders), [live HTML in the canvas](https://debuff.jp/spryte/html-in-canvas) (experimental), [pixel art](https://debuff.jp/spryte/pixel-art)
 - **[How spryte got fast](https://debuff.jp/research/how-spryte-got-fast):** the research write-up, from the first profile to the 8-byte instance format
 - **[Migrating from PixiJS](https://debuff.jp/spryte/migrating-from-pixijs):** the mental model, side-by-side code and a mapping table
 - **[Migrating from Phaser](https://debuff.jp/spryte/migrating-from-phaser):** what spryte replaces in Phaser, side-by-side code and a mapping table

@@ -2,6 +2,7 @@ import type { Backend, BlendMode, ClipRect, Matrix, RawContext, TextureSource } 
 import type { BitmapFont } from "./bitmap-font.js";
 import { type Color, toRGBA } from "./color.js";
 import { placeAt, type SpritesEach } from "./copies.js";
+import { Layer, type LayerItem } from "./layer.js";
 import { Shader } from "./shader.js";
 import { RenderTarget } from "./target.js";
 
@@ -51,6 +52,7 @@ const WHITE = 0xffffffff;
  * Everything batches automatically; call order is draw order.
  */
 export class Draw {
+  private warnedDetached = false;
   /** Global alpha multiplier for subsequent draws. */
   alpha = 1;
   /**
@@ -68,6 +70,8 @@ export class Draw {
   /** @internal Bumped whenever `m` changes, so backends can skip comparing the transform per sprite. */
   mver = 0;
   private readonly frames = new WeakMap<TextureSource, Frame>();
+  /** The layer `record()` is filling, if any. */
+  private rec: LayerItem[] | undefined;
   private lastImage: TextureSource | null = null;
   private lastFrame: Frame | undefined;
   /** @internal */
@@ -290,8 +294,90 @@ export class Draw {
     this.pop();
   }
 
+  /**
+   * Record the sprites `fn` draws into a `Layer`, without drawing them, to draw them all again each frame with
+   * `replay()`. Use it for what doesn't change: a tilemap, a background. Inside `fn`, draw in the layer's own
+   * coordinates with `draw.sprite` (and `push`, `translate`, `pop`); other drawing calls throw. `draw.alpha`
+   * isn't recorded: it applies when the layer is replayed.
+   *
+   * ```ts
+   * const ground = draw.record((d) => {
+   *   for (const t of map.tiles) d.sprite(tiles[t.id], t.x * 16, t.y * 16, { origin: [0, 0] });
+   * });
+   * // each frame:
+   * draw.withCamera(camera, () => draw.replay(ground));
+   * ```
+   */
+  record(fn: (draw: Draw) => void): Layer {
+    if (this.rec) throw new Error("spryte: draw.record() can't be called inside another record()");
+    const items: LayerItem[] = [];
+    const backend = this.backend;
+    const alpha = this.alpha;
+    const depth = this.depth;
+    // Record in the layer's own space: replay applies whatever transform is current then.
+    this.push();
+    const m = this.m;
+    m[0] = 1;
+    m[1] = 0;
+    m[2] = 0;
+    m[3] = 1;
+    m[4] = 0;
+    m[5] = 0;
+    this.mver++;
+    this.alpha = 1;
+    this.backend = recording(backend);
+    this.rec = items;
+    try {
+      fn(this);
+    } finally {
+      this.rec = undefined;
+      this.backend = backend;
+      this.alpha = alpha;
+      while (this.depth > depth + 1) this.pop();
+      this.pop();
+    }
+    return new Layer(items);
+  }
+
+  /**
+   * Draw a layer from `record()` under the current transform and `draw.alpha`, as if its sprites were drawn
+   * here one by one. On WebGL2 that's one draw call per eight images it uses; on Canvas 2D, and under a custom
+   * shader or `draw.alpha` below 1, its sprites are drawn again the usual way (the same pixels, without the saving).
+   */
+  replay(layer: Layer): void {
+    if (this.rec) throw new Error("spryte: draw.replay() can't be recorded; record the sprites themselves");
+    if (layer.size === 0) return;
+    if (this.alpha === 1 && !this.shader && this.backend.replay?.(layer, this.m)) {
+      this.quads += layer.size;
+      return;
+    }
+    for (const it of layer.items) {
+      const m = it.m;
+      const moved = m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0;
+      if (moved) {
+        this.push();
+        this.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+      }
+      this.sprite(it.frame, it.x, it.y, it.o);
+      if (moved) this.pop();
+    }
+  }
+
   /** Draw an image frame (or a whole image) at `x, y`, anchored by `origin`. Allocation-free hot path. */
   sprite(frame: Frame | TextureSource, x: number, y: number, o: SpriteDrawOptions = NO_OPTIONS): void {
+    if (this.rec) {
+      const smooth = o.smooth ?? this.smooth;
+      const m = this.m;
+      this.rec.push({
+        frame: this.frameOf(frame),
+        x,
+        y,
+        o: { ...o, smooth },
+        m: [m[0], m[1], m[2], m[3], m[4], m[5]],
+        color: this.spriteColor(o),
+      });
+      return;
+    }
     const b = this.backend;
     if (b.sprite) {
       // The backend does the transform algebra itself (on the GPU).
@@ -330,6 +416,9 @@ export class Draw {
    * ```ts
    * draw.sprites(itemFrames, pos, n, {}, { frame: itemKind });
    * ```
+   *
+   * Arrays are read during the call and not kept. An array viewing wasm memory detaches when that memory grows, and
+   * a detached array has length 0, so nothing draws: recreate the view after growth, or each frame.
    */
   sprites(
     frame: Frame | TextureSource | readonly Frame[],
@@ -355,7 +444,10 @@ export class Draw {
         if (field !== undefined) count = Math.min(count, field.length);
       }
     }
-    if (count <= 0) return;
+    if (count <= 0) {
+      this.warnIfDetached(positions, each);
+      return;
+    }
     // Under a custom shader, the per-copy program runs the effect: route plain copies through it too.
     if (stride || this.shader || (each && (each.scale || each.rotation || each.color || each.frame))) {
       this.spritesEach(frame, positions, count, o, each ?? NO_EACH);
@@ -368,6 +460,19 @@ export class Draw {
     const snap = !smooth && t[1] === 0 && t[2] === 0;
     this.quads += count;
     this.backend.quads(t, this.m, positions, count, f.image, f.x, f.y, f.w, f.h, this.spriteColor(o), o.flash ?? 0, smooth, snap);
+  }
+
+  private warnIfDetached(positions: ArrayLike<number>, each?: SpritesEach): void {
+    if (this.warnedDetached) return;
+    if (
+      !isDetached(positions) &&
+      !(each && (isDetached(each.scale) || isDetached(each.rotation) || isDetached(each.color) || isDetached(each.frame)))
+    )
+      return;
+    this.warnedDetached = true;
+    console.warn(
+      "spryte: draw.sprites got a detached array, so nothing drew. If it views wasm memory, recreate the view after the memory grows",
+    );
   }
 
   private spritesEach(
@@ -743,6 +848,36 @@ export class Draw {
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
+/** Stands in while `record()` runs: only `draw.sprite` can be recorded, so anything reaching the backend throws. */
+function isDetached(array: unknown): boolean {
+  return (array as { buffer?: { detached?: boolean } } | undefined)?.buffer?.detached === true;
+}
+
+function recording(was: Backend): Backend {
+  const fail = () => {
+    throw new Error("spryte: only draw.sprite can be recorded into a layer (with push, translate and pop)");
+  };
+  return {
+    kind: was.kind,
+    raw: was.raw,
+    begin: fail,
+    quad: fail,
+    path: fail,
+    mesh: fail,
+    quads: fail,
+    copies: fail,
+    setBlend: fail,
+    setClip: fail,
+    setTarget: fail,
+    setShader: fail,
+    disposeTarget: fail,
+    end: fail,
+    resize: () => {},
+    invalidate: () => {},
+    dispose: () => {},
+  };
+}
+
 /** Stands in for a disposed backend: any drawing throws a clear error instead of touching dead GPU objects. */
 function disposed(was: Backend): Backend {
   const fail = () => {
@@ -754,6 +889,7 @@ function disposed(was: Backend): Backend {
     begin: fail,
     quad: fail,
     path: fail,
+    mesh: fail,
     quads: fail,
     copies: fail,
     setBlend: fail,

@@ -1,6 +1,6 @@
 # spryte benchmarks
 
-**Short version:** on the same machine, assets and simulation, spryte 0.7.2 is **2.4-4.5x faster than PixiJS 8** on comparable APIs, and ships about **7x less JavaScript** at startup. A pixel-parity gate confirms both draw the same scene before anything is timed. These are one desktop machine's numbers. Across the other devices measured in [2dbench](https://github.com/debuffjp/2dbench#across-devices) (an RTX 4080 laptop on Linux, AMD integrated graphics, an Apple M5 Pro, iPhones in Safari and Chrome, an Android phone in Firefox), spryte's one-call-per-sprite path is ahead on every one.
+**Short version:** on the same machine, assets and simulation, spryte 0.7.2 is **2.4-4.5x faster than PixiJS 8** on comparable APIs, and ships about **7x less JavaScript** at startup. A pixel-parity gate confirms both draw the same scene before anything is timed. These are one desktop machine's numbers. Across the other devices measured in [2dbench](https://github.com/debuffjp/2dbench#across-devices) (an RTX 4080 laptop on Linux, AMD integrated graphics, an Apple M5 Pro in Chrome, iPhones in Safari and Chrome, an Android phone in Firefox), spryte's one-call-per-sprite path is ahead on every one.
 
 ## Results, 2026-10-28 (spryte 0.7.2)
 
