@@ -53,6 +53,7 @@ const WHITE = 0xffffffff;
  */
 export class Draw {
   private warnedDetached = false;
+  private warnedMixed = false;
   /** Global alpha multiplier for subsequent draws. */
   alpha = 1;
   /**
@@ -492,6 +493,12 @@ export class Draw {
       if (each.frame !== undefined) {
         frames = all;
         for (let i = 1; i < all.length && !mixed; i++) mixed = (all[i] as Frame).image !== f.image;
+        if (mixed && !this.warnedMixed && typeof import.meta.env !== "undefined" && import.meta.env.DEV === true) {
+          this.warnedMixed = true;
+          console.warn(
+            "spryte: draw.sprites got frames from more than one image, so each copy draws as its own quad instead of one instanced call. Put the frames on one atlas to keep it one call",
+          );
+        }
       }
     } else {
       const one = frame as Frame | TextureSource;

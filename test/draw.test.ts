@@ -480,3 +480,40 @@ describe("sprites with a detached array", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe("sprites with frames across images", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const setup = () => {
+    const { draw } = recorder();
+    const copies = vi.fn();
+    (draw as unknown as { backend: Backend }).backend.copies = copies;
+    return { draw, copies, a: {} as TextureSource, b: {} as TextureSource };
+  };
+
+  it("warns once per renderer in development", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { draw, copies, a, b } = setup();
+    const frames = [
+      { image: a, x: 0, y: 0, w: 8, h: 8 },
+      { image: b, x: 0, y: 0, w: 8, h: 8 },
+    ];
+    draw.sprites(frames, new Float32Array(4), 2, {}, { frame: [0, 1] });
+    draw.sprites(frames, new Float32Array(4), 2, {}, { frame: [1, 0] });
+    expect(copies).toHaveBeenCalledTimes(2);
+    expect(copies.mock.calls[0]?.[0].mixed).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/more than one image.*atlas/);
+  });
+
+  it("stays quiet for frames on one image", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { draw, a } = setup();
+    const frames = [
+      { image: a, x: 0, y: 0, w: 8, h: 8 },
+      { image: a, x: 8, y: 0, w: 8, h: 8 },
+    ];
+    draw.sprites(frames, new Float32Array(4), 2, {}, { frame: [0, 1] });
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

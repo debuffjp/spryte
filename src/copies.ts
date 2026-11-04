@@ -29,7 +29,8 @@ export interface SpritesEach {
   color?: Uint32Array | number;
   /**
    * Frame per copy: an index into the `Frame[]` passed as `draw.sprites`' first argument (an index past the
-   * end throws). Frames on one image stay one draw call; frames across images draw one quad per copy.
+   * end throws). Frames on one image stay one draw call; frames across images draw one quad per copy (warned once
+   * in development).
    * With `stride`, an offset into each record.
    */
   frame?: ArrayLike<number> | number;
